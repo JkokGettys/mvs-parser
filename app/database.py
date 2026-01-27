@@ -4,13 +4,16 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
 from app.config import DATABASE_URL
 
-# Handle Railway SSL
-connect_args = {}
-if 'railway' in DATABASE_URL:
-    connect_args = {'sslmode': 'require'}
+# Handle Railway SSL and missing URL
+engine = None
+SessionLocal = None
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+if DATABASE_URL:
+    connect_args = {}
+    if 'railway' in DATABASE_URL:
+        connect_args = {'sslmode': 'require'}
+    engine = create_engine(DATABASE_URL, connect_args=connect_args)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
