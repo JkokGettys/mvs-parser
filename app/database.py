@@ -1,20 +1,35 @@
+import os
 from sqlalchemy import create_engine, Column, Integer, String, Numeric, Boolean, DateTime, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
-from app.config import DATABASE_URL
 
-# Handle Railway SSL and missing URL
-engine = None
-SessionLocal = None
-
-if DATABASE_URL:
-    connect_args = {}
-    if 'railway' in DATABASE_URL:
-        connect_args = {'sslmode': 'require'}
-    engine = create_engine(DATABASE_URL, connect_args=connect_args)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Lazy initialization - don't connect at import time
+_engine = None
+_SessionLocal = None
+
+
+def get_engine():
+    global _engine
+    if _engine is None:
+        database_url = os.getenv('MVS_DATABASE_URL') or os.getenv('DATABASE_PUBLIC_URL') or os.getenv('DATABASE_URL')
+        if not database_url:
+            raise ValueError("No database URL found. Set MVS_DATABASE_URL environment variable.")
+        
+        connect_args = {}
+        if 'railway' in database_url:
+            connect_args = {'sslmode': 'require'}
+        _engine = create_engine(database_url, connect_args=connect_args)
+    return _engine
+
+
+def get_session_local():
+    global _SessionLocal
+    if _SessionLocal is None:
+        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+    return _SessionLocal
 
 
 class LocalMultiplier(Base):
@@ -87,6 +102,7 @@ class RegionMapping(Base):
 
 
 def get_db():
+    SessionLocal = get_session_local()
     db = SessionLocal()
     try:
         yield db
@@ -95,4 +111,4 @@ def get_db():
 
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=get_engine())
