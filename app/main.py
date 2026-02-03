@@ -26,6 +26,19 @@ async def health_check():
     return {"status": "ok", "service": "mvs-parser-service"}
 
 
+@app.post("/migrate/fix-text-columns")
+async def migrate_fix_text_columns(db: Session = Depends(get_db)):
+    """Migrate VARCHAR columns to TEXT for base cost rows"""
+    try:
+        db.execute("ALTER TABLE mvs_base_cost_rows ALTER COLUMN building_class TYPE TEXT")
+        db.execute("ALTER TABLE mvs_base_cost_rows ALTER COLUMN quality_type TYPE TEXT")
+        db.commit()
+        return {"success": True, "message": "Columns migrated to TEXT"}
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/stats")
 async def get_stats(db: Session = Depends(get_db)):
     """Get current record counts from database"""
