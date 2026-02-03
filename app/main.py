@@ -3,8 +3,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 import os
 
-from app.database import get_db, init_db
+from app.database import get_db, init_db, BaseCostTable, BaseCostRow
 from app.parsers import local_multipliers, current_cost, story_height, floor_area_perimeter
+from app.parsers import base_cost_tables
 
 app = FastAPI(
     title="MVS Parser Service",
@@ -35,6 +36,8 @@ async def get_stats(db: Session = Depends(get_db)):
         "current_cost_multipliers": db.query(CurrentCostMultiplier).count(),
         "story_height_multipliers": db.query(StoryHeightMultiplier).count(),
         "floor_area_perimeter_multipliers": db.query(FloorAreaPerimeterMultiplier).count(),
+        "base_cost_tables": db.query(BaseCostTable).count(),
+        "base_cost_rows": db.query(BaseCostRow).count(),
     }
 
 
@@ -117,6 +120,140 @@ async def parse_floor_area_perimeter_endpoint(
         os.remove(temp_path)
         
         return {"success": True, "records_updated": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============ BASE COST TABLE ENDPOINTS ============
+
+@app.get("/tables")
+async def list_tables(
+    section: int = None,
+    db: Session = Depends(get_db)
+):
+    """List all base cost tables, optionally filtered by section"""
+    query = db.query(BaseCostTable)
+    if section is not None:
+        query = query.filter(BaseCostTable.section == section)
+    
+    tables = query.order_by(BaseCostTable.section, BaseCostTable.page).all()
+    
+    return {
+        "count": len(tables),
+        "tables": [
+            {
+                "id": t.id,
+                "name": t.name,
+                "occupancy_code": t.occupancy_code,
+                "section": t.section,
+                "page": t.page,
+                "pdf_page": t.pdf_page,
+                "file_name": t.file_name,
+                "row_count": len(t.rows)
+            }
+            for t in tables
+        ]
+    }
+
+
+@app.get("/tables/{table_id}")
+async def get_table(
+    table_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get a single table with all its rows and metadata"""
+    table = db.query(BaseCostTable).filter(BaseCostTable.id == table_id).first()
+    
+    if not table:
+        raise HTTPException(status_code=404, detail="Table not found")
+    
+    return {
+        "id": table.id,
+        "name": table.name,
+        "occupancy_code": table.occupancy_code,
+        "section": table.section,
+        "page": table.page,
+        "pdf_page": table.pdf_page,
+        "notes": table.notes,
+        "file_name": table.file_name,
+        "rows": [
+            {
+                "id": r.id,
+                "building_class": r.building_class,
+                "quality_type": r.quality_type,
+                "exterior_walls": r.exterior_walls,
+                "interior_finish": r.interior_finish,
+                "lighting_plumbing": r.lighting_plumbing,
+                "heat": r.heat,
+                "cost_sqm": float(r.cost_sqm) if r.cost_sqm else None,
+                "cost_cuft": float(r.cost_cuft) if r.cost_cuft else None,
+                "cost_sqft": float(r.cost_sqft) if r.cost_sqft else None,
+            }
+            for r in sorted(table.rows, key=lambda x: x.row_order)
+        ]
+    }
+
+
+@app.get("/tables/by-name/{name}")
+async def get_table_by_name(
+    name: str,
+    db: Session = Depends(get_db)
+):
+    """Search for tables by name (partial match)"""
+    tables = db.query(BaseCostTable).filter(
+        BaseCostTable.name.ilike(f"%{name}%")
+    ).all()
+    
+    return {
+        "count": len(tables),
+        "tables": [
+            {
+                "id": t.id,
+                "name": t.name,
+                "occupancy_code": t.occupancy_code,
+                "section": t.section,
+                "page": t.page,
+                "pdf_page": t.pdf_page,
+            }
+            for t in tables
+        ]
+    }
+
+
+@app.post("/import/base-cost-tables")
+async def import_base_cost_tables(
+    section: int,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Import base cost tables from uploaded markdown files
+    
+    Args:
+        section: Section number (used for grouping and clearing existing)
+        files: List of markdown files to import
+    """
+    try:
+        import tempfile
+        import shutil
+        
+        # Create temp directory
+        temp_dir = tempfile.mkdtemp()
+        
+        # Save uploaded files
+        for f in files:
+            file_path = os.path.join(temp_dir, f.filename)
+            with open(file_path, "wb") as dest:
+                content = await f.read()
+                dest.write(content)
+        
+        # Import from directory
+        result = base_cost_tables.import_from_directory(temp_dir, db, section)
+        
+        # Clean up
+        shutil.rmtree(temp_dir)
+        
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
