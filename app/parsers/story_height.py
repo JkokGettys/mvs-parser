@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import StoryHeightMultiplier
 
 # Import from the original parser
-from app.parsers.story_height_original import parse_height_multiplier_table
+from app.parsers.story_height_original import parse_story_height_table
 
 
 def parse_and_save(pdf_path: str, db: Session, page: int = 90) -> int:
@@ -27,7 +27,7 @@ def parse_and_save(pdf_path: str, db: Session, page: int = 90) -> int:
     print(f"[StoryHeight] Page {page}")
     
     # Use the original parser
-    results = parse_height_multiplier_table(pdf_path, page, page)
+    results = parse_story_height_table(pdf_path, page)
     
     if not results['success']:
         raise Exception(f"Parser failed: {results['errors']}")

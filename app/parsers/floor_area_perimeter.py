@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import FloorAreaPerimeterMultiplier
 
 # Import from the original parser
-from app.parsers.floor_area_perimeter_original import parse_area_perimeter_multiplier_table
+from app.parsers.floor_area_perimeter_original import parse_area_perimeter_table
 
 
 def parse_and_save(pdf_path: str, db: Session, page: int = 90) -> int:
@@ -27,7 +27,7 @@ def parse_and_save(pdf_path: str, db: Session, page: int = 90) -> int:
     print(f"[FloorAreaPerimeter] Page {page}")
     
     # Use the original parser
-    results = parse_area_perimeter_multiplier_table(pdf_path, page, page)
+    results = parse_area_perimeter_table(pdf_path, page)
     
     if not results['success']:
         raise Exception(f"Parser failed: {results['errors']}")
