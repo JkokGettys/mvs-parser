@@ -150,6 +150,50 @@ class BaseCostRow(Base):
     table = relationship("BaseCostTable", back_populates="rows")
 
 
+class ElevatorType(Base):
+    """Elevator type definitions from MVS Section 58"""
+    __tablename__ = 'mvs_elevator_types'
+    
+    id = Column(Integer, primary_key=True)
+    category = Column(String(50), nullable=False)  # 'passenger' or 'freight'
+    name = Column(String(255), nullable=False)
+    source_page = Column(Integer, default=701)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    # Relationships
+    costs = relationship("ElevatorCost", back_populates="elevator_type", cascade="all, delete-orphan")
+    cost_per_stops = relationship("ElevatorCostPerStop", back_populates="elevator_type", cascade="all, delete-orphan")
+
+
+class ElevatorCost(Base):
+    """Individual elevator cost entries (speed x capacity matrix)"""
+    __tablename__ = 'mvs_elevator_costs'
+    
+    id = Column(Integer, primary_key=True)
+    elevator_type_id = Column(Integer, ForeignKey('mvs_elevator_types.id', ondelete='CASCADE'), nullable=False)
+    speed_fpm = Column(Integer, nullable=False)  # feet per minute
+    capacity_lbs = Column(Integer, nullable=False)  # pounds
+    base_cost = Column(Numeric(12, 2), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    
+    elevator_type = relationship("ElevatorType", back_populates="costs")
+
+
+class ElevatorCostPerStop(Base):
+    """Cost per additional stop for elevators"""
+    __tablename__ = 'mvs_elevator_cost_per_stop'
+    
+    id = Column(Integer, primary_key=True)
+    elevator_type_id = Column(Integer, ForeignKey('mvs_elevator_types.id', ondelete='CASCADE'), nullable=False)
+    capacity_lbs = Column(Integer, nullable=False)
+    door_type = Column(String(20), nullable=False)  # 'standard', 'manual', 'power'
+    cost_per_stop = Column(Numeric(10, 2), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    
+    elevator_type = relationship("ElevatorType", back_populates="cost_per_stops")
+
+
 def get_db():
     SessionLocal = get_session_local()
     db = SessionLocal()

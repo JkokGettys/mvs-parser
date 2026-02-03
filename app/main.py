@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import os
 
-from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier
+from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier, ElevatorType, ElevatorCost, ElevatorCostPerStop
 from app.parsers import local_multipliers, current_cost, story_height, floor_area_perimeter
 from app.parsers import base_cost_tables
 
@@ -76,6 +76,8 @@ async def get_stats(db: Session = Depends(get_db)):
         "floor_area_perimeter_multipliers": db.query(FloorAreaPerimeterMultiplier).count(),
         "base_cost_tables": db.query(BaseCostTable).count(),
         "base_cost_rows": db.query(BaseCostRow).count(),
+        "elevator_types": db.query(ElevatorType).count(),
+        "elevator_costs": db.query(ElevatorCost).count(),
     }
 
 
@@ -405,6 +407,179 @@ async def import_base_cost_tables(
         
         return result
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============ ELEVATOR ENDPOINTS ============
+
+@app.get("/elevators")
+async def list_elevators(
+    category: str = None,
+    db: Session = Depends(get_db)
+):
+    """List all elevator types, optionally filtered by category (passenger/freight)"""
+    query = db.query(ElevatorType)
+    if category:
+        query = query.filter(ElevatorType.category.ilike(f"%{category}%"))
+    
+    elevator_types = query.order_by(ElevatorType.category, ElevatorType.name).all()
+    
+    return {
+        "count": len(elevator_types),
+        "elevators": [
+            {
+                "id": e.id,
+                "category": e.category,
+                "name": e.name,
+                "source_page": e.source_page,
+                "cost_count": len(e.costs),
+                "cost_per_stop_count": len(e.cost_per_stops),
+            }
+            for e in elevator_types
+        ]
+    }
+
+
+@app.get("/elevators/{elevator_id}")
+async def get_elevator(
+    elevator_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get a single elevator type with all its costs"""
+    elevator = db.query(ElevatorType).filter(ElevatorType.id == elevator_id).first()
+    
+    if not elevator:
+        raise HTTPException(status_code=404, detail="Elevator type not found")
+    
+    # Group costs by speed to create matrix view
+    costs_by_speed = {}
+    for cost in elevator.costs:
+        if cost.speed_fpm not in costs_by_speed:
+            costs_by_speed[cost.speed_fpm] = {}
+        costs_by_speed[cost.speed_fpm][cost.capacity_lbs] = float(cost.base_cost)
+    
+    # Get unique speeds and capacities
+    speeds = sorted(set(c.speed_fpm for c in elevator.costs))
+    capacities = sorted(set(c.capacity_lbs for c in elevator.costs))
+    
+    return {
+        "id": elevator.id,
+        "category": elevator.category,
+        "name": elevator.name,
+        "source_page": elevator.source_page,
+        "speeds": speeds,
+        "capacities": capacities,
+        "cost_matrix": costs_by_speed,
+        "costs": [
+            {
+                "id": c.id,
+                "speed_fpm": c.speed_fpm,
+                "capacity_lbs": c.capacity_lbs,
+                "base_cost": float(c.base_cost),
+            }
+            for c in sorted(elevator.costs, key=lambda x: (x.speed_fpm, x.capacity_lbs))
+        ],
+        "cost_per_stop": [
+            {
+                "id": cps.id,
+                "capacity_lbs": cps.capacity_lbs,
+                "door_type": cps.door_type,
+                "cost_per_stop": float(cps.cost_per_stop),
+            }
+            for cps in sorted(elevator.cost_per_stops, key=lambda x: (x.door_type, x.capacity_lbs))
+        ]
+    }
+
+
+@app.post("/import/elevators")
+async def import_elevators(
+    json_file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Import elevator data from uploaded JSON file (elevators.json format)
+    """
+    import json
+    
+    try:
+        content = await json_file.read()
+        data = json.loads(content.decode('utf-8'))
+        
+        # Clear existing elevator data
+        db.query(ElevatorCostPerStop).delete()
+        db.query(ElevatorCost).delete()
+        db.query(ElevatorType).delete()
+        db.commit()
+        
+        source_page = data.get('metadata', {}).get('pdfPage', 701)
+        imported_types = 0
+        imported_costs = 0
+        imported_per_stops = 0
+        
+        # Process passenger and freight categories
+        for category in ['passenger', 'freight']:
+            if category not in data:
+                continue
+                
+            for name, elevator_data in data[category].items():
+                # Create elevator type
+                elevator_type = ElevatorType(
+                    category=category,
+                    name=name,
+                    source_page=source_page
+                )
+                db.add(elevator_type)
+                db.flush()  # Get the ID
+                imported_types += 1
+                
+                speeds = elevator_data.get('speeds', [])
+                capacities = elevator_data.get('capacities', [])
+                costs = elevator_data.get('costs', [])
+                
+                # Import cost matrix (speeds x capacities)
+                for speed_idx, speed in enumerate(speeds):
+                    if speed_idx < len(costs):
+                        for cap_idx, capacity in enumerate(capacities):
+                            if cap_idx < len(costs[speed_idx]):
+                                cost_value = costs[speed_idx][cap_idx]
+                                cost_entry = ElevatorCost(
+                                    elevator_type_id=elevator_type.id,
+                                    speed_fpm=speed,
+                                    capacity_lbs=capacity,
+                                    base_cost=cost_value
+                                )
+                                db.add(cost_entry)
+                                imported_costs += 1
+                
+                # Import cost per stop (handle different key names)
+                cost_per_stop_keys = [
+                    ('cost_per_stop', 'standard'),
+                    ('cost_per_stop_manual', 'manual'),
+                    ('cost_per_stop_power', 'power'),
+                ]
+                
+                for key, door_type in cost_per_stop_keys:
+                    if key in elevator_data:
+                        for cap_str, cost_value in elevator_data[key].items():
+                            cps_entry = ElevatorCostPerStop(
+                                elevator_type_id=elevator_type.id,
+                                capacity_lbs=int(cap_str),
+                                door_type=door_type,
+                                cost_per_stop=cost_value
+                            )
+                            db.add(cps_entry)
+                            imported_per_stops += 1
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "elevator_types": imported_types,
+            "costs": imported_costs,
+            "cost_per_stops": imported_per_stops
+        }
+    except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
