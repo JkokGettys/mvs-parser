@@ -199,25 +199,35 @@ def parse_directory(directory_path: str) -> List[Dict]:
     return tables
 
 
-def save_tables_to_db(tables: List[Dict], db: Session, section: int = None) -> int:
+def save_tables_to_db(tables: List[Dict], db: Session, section: int = None, clear_section: bool = False) -> int:
     """
     Save parsed tables to database
     
     Args:
         tables: List of parsed table dicts
         db: Database session
-        section: If specified, only delete tables from this section before inserting
+        section: Section number for the tables
+        clear_section: If True, delete all existing tables for the section before inserting
     
     Returns:
         Number of tables saved
     """
-    # Clear existing tables for the section if specified
-    if section is not None:
+    # Only clear if explicitly requested
+    if clear_section and section is not None:
         existing = db.query(BaseCostTable).filter(BaseCostTable.section == section).all()
         for table in existing:
             db.delete(table)
         db.commit()
         print(f"[BaseCostTables] Cleared existing tables for Section {section}")
+    
+    # Delete tables with same file_name to avoid duplicates
+    for table_data in tables:
+        file_name = table_data.get('file_name')
+        if file_name:
+            existing = db.query(BaseCostTable).filter(BaseCostTable.file_name == file_name).first()
+            if existing:
+                db.delete(existing)
+                db.commit()
     
     saved_count = 0
     
@@ -289,7 +299,7 @@ def import_from_directory(directory_path: str, db: Session, section: int = None)
         for table in tables:
             table['section'] = section
     
-    saved = save_tables_to_db(tables, db, section)
+    saved = save_tables_to_db(tables, db, section, clear_section=False)
     total_rows = sum(len(t['rows']) for t in tables)
     
     return {
