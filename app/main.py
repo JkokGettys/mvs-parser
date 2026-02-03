@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import os
 
-from app.database import get_db, init_db, BaseCostTable, BaseCostRow
+from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier
 from app.parsers import local_multipliers, current_cost, story_height, floor_area_perimeter
 from app.parsers import base_cost_tables
 
@@ -160,6 +160,118 @@ async def parse_floor_area_perimeter_endpoint(
         return {"success": True, "records_updated": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============ LOCAL MULTIPLIERS ENDPOINTS ============
+
+@app.get("/local-multipliers")
+async def list_local_multipliers(
+    country: str = None,
+    region: str = None,
+    db: Session = Depends(get_db)
+):
+    """List all local multipliers, optionally filtered by country or region"""
+    query = db.query(LocalMultiplier)
+    if country:
+        query = query.filter(LocalMultiplier.country.ilike(f"%{country}%"))
+    if region:
+        query = query.filter(LocalMultiplier.region.ilike(f"%{region}%"))
+    
+    multipliers = query.order_by(LocalMultiplier.country, LocalMultiplier.region, LocalMultiplier.location).all()
+    
+    return {
+        "count": len(multipliers),
+        "multipliers": [
+            {
+                "id": m.id,
+                "location": m.location,
+                "city": m.city,
+                "region": m.region,
+                "country": m.country,
+                "class_a": float(m.class_a) if m.class_a else None,
+                "class_b": float(m.class_b) if m.class_b else None,
+                "class_c": float(m.class_c) if m.class_c else None,
+                "class_d": float(m.class_d) if m.class_d else None,
+                "class_s": float(m.class_s) if m.class_s else None,
+                "is_regional": m.is_regional,
+                "source_page": m.source_page,
+            }
+            for m in multipliers
+        ]
+    }
+
+
+@app.get("/local-multipliers/regions")
+async def list_local_multiplier_regions(
+    country: str = None,
+    db: Session = Depends(get_db)
+):
+    """Get unique regions for local multipliers"""
+    query = db.query(LocalMultiplier.region, LocalMultiplier.country).distinct()
+    if country:
+        query = query.filter(LocalMultiplier.country.ilike(f"%{country}%"))
+    
+    results = query.order_by(LocalMultiplier.country, LocalMultiplier.region).all()
+    
+    return {
+        "regions": [{"region": r.region, "country": r.country} for r in results]
+    }
+
+
+# ============ CURRENT COST MULTIPLIERS ENDPOINTS ============
+
+@app.get("/current-cost-multipliers")
+async def list_current_cost_multipliers(
+    method: str = None,
+    region: str = None,
+    building_class: str = None,
+    db: Session = Depends(get_db)
+):
+    """List all current cost multipliers, optionally filtered"""
+    query = db.query(CurrentCostMultiplier)
+    if method:
+        query = query.filter(CurrentCostMultiplier.method.ilike(f"%{method}%"))
+    if region:
+        query = query.filter(CurrentCostMultiplier.region.ilike(f"%{region}%"))
+    if building_class:
+        query = query.filter(CurrentCostMultiplier.building_class == building_class)
+    
+    multipliers = query.order_by(
+        CurrentCostMultiplier.method,
+        CurrentCostMultiplier.region,
+        CurrentCostMultiplier.building_class,
+        CurrentCostMultiplier.effective_date
+    ).all()
+    
+    return {
+        "count": len(multipliers),
+        "multipliers": [
+            {
+                "id": m.id,
+                "method": m.method,
+                "region": m.region,
+                "building_class": m.building_class,
+                "effective_date": m.effective_date,
+                "multiplier": float(m.multiplier) if m.multiplier else None,
+                "source_page": m.source_page,
+            }
+            for m in multipliers
+        ]
+    }
+
+
+@app.get("/current-cost-multipliers/methods")
+async def list_current_cost_methods(db: Session = Depends(get_db)):
+    """Get unique methods for current cost multipliers"""
+    results = db.query(CurrentCostMultiplier.method).distinct().all()
+    return {"methods": [r.method for r in results]}
+
+
+@app.get("/current-cost-multipliers/regions")
+async def list_current_cost_regions(db: Session = Depends(get_db)):
+    """Get unique regions for current cost multipliers"""
+    results = db.query(CurrentCostMultiplier.region).distinct().all()
+    return {"regions": [r.region for r in results]}
 
 
 # ============ BASE COST TABLE ENDPOINTS ============
