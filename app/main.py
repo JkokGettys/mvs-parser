@@ -19,6 +19,19 @@ async def startup():
     # Ensure tables exist
     init_db()
     print("[MVS Parser Service] Database initialized")
+    
+    # Run migration to fix TEXT columns
+    try:
+        from app.database import get_session_local
+        SessionLocal = get_session_local()
+        db = SessionLocal()
+        db.execute("ALTER TABLE mvs_base_cost_rows ALTER COLUMN building_class TYPE TEXT")
+        db.execute("ALTER TABLE mvs_base_cost_rows ALTER COLUMN quality_type TYPE TEXT")
+        db.commit()
+        db.close()
+        print("[MVS Parser Service] TEXT columns migration completed")
+    except Exception as e:
+        print(f"[MVS Parser Service] Migration skipped or failed: {e}")
 
 
 @app.get("/health")
