@@ -33,10 +33,11 @@ async def startup():
     # Run migration to fix TEXT columns
     try:
         from app.database import get_session_local
+        from sqlalchemy import text
         SessionLocal = get_session_local()
         db = SessionLocal()
-        db.execute("ALTER TABLE mvs_base_cost_rows ALTER COLUMN building_class TYPE TEXT")
-        db.execute("ALTER TABLE mvs_base_cost_rows ALTER COLUMN quality_type TYPE TEXT")
+        db.execute(text("ALTER TABLE mvs_base_cost_rows ALTER COLUMN building_class TYPE TEXT"))
+        db.execute(text("ALTER TABLE mvs_base_cost_rows ALTER COLUMN quality_type TYPE TEXT"))
         db.commit()
         db.close()
         print("[MVS Parser Service] TEXT columns migration completed")
@@ -52,9 +53,10 @@ async def health_check():
 @app.post("/migrate/fix-text-columns")
 async def migrate_fix_text_columns(db: Session = Depends(get_db)):
     """Migrate VARCHAR columns to TEXT for base cost rows"""
+    from sqlalchemy import text
     try:
-        db.execute("ALTER TABLE mvs_base_cost_rows ALTER COLUMN building_class TYPE TEXT")
-        db.execute("ALTER TABLE mvs_base_cost_rows ALTER COLUMN quality_type TYPE TEXT")
+        db.execute(text("ALTER TABLE mvs_base_cost_rows ALTER COLUMN building_class TYPE TEXT"))
+        db.execute(text("ALTER TABLE mvs_base_cost_rows ALTER COLUMN quality_type TYPE TEXT"))
         db.commit()
         return {"success": True, "message": "Columns migrated to TEXT"}
     except Exception as e:
