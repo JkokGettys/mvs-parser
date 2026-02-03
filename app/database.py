@@ -128,8 +128,8 @@ class BaseCostRow(Base):
     table_id = Column(Integer, ForeignKey('mvs_base_cost_tables.id', ondelete='CASCADE'), nullable=False)
     
     # Core cost data columns
-    building_class = Column(String(50), nullable=False)
-    quality_type = Column(String(100), nullable=True)
+    building_class = Column(Text, nullable=False)
+    quality_type = Column(Text, nullable=True)
     exterior_walls = Column(Text, nullable=True)
     interior_finish = Column(Text, nullable=True)
     lighting_plumbing = Column(Text, nullable=True)
