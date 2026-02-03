@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import os
 
@@ -11,6 +12,15 @@ app = FastAPI(
     title="MVS Parser Service",
     description="Service for parsing Marshall Valuation Service PDF data and writing to PostgreSQL",
     version="1.0.0"
+)
+
+# Enable CORS for webapp access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
