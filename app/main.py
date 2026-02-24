@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import os
 
-from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier, ElevatorType, ElevatorCost, ElevatorCostPerStop
+from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier, ElevatorType, ElevatorCost, ElevatorCostPerStop, PdfVersion
 from app.parsers import local_multipliers, current_cost, story_height, floor_area_perimeter
 from app.parsers import base_cost_tables
 
@@ -50,6 +50,195 @@ async def health_check():
     return {"status": "ok", "service": "mvs-parser-service"}
 
 
+@app.post("/pdf-versions/upload")
+async def upload_pdf_version(
+    pdf_file: UploadFile = File(...),
+    version_name: str = None,
+    edition_year: int = None,
+    notes: str = None,
+    db: Session = Depends(get_db)
+):
+    """Upload a PDF to the volume and register it as a version in the database"""
+    import hashlib
+    import time
+
+    storage_path = os.getenv("MVS_PDF_STORAGE_PATH", "/mvs-pdfs")
+    os.makedirs(storage_path, exist_ok=True)
+
+    content = await pdf_file.read()
+    file_hash = hashlib.sha256(content).hexdigest()
+
+    # Check for duplicate by hash
+    existing = db.query(PdfVersion).filter(PdfVersion.file_hash == file_hash).first()
+    if existing:
+        return {
+            "id": existing.id,
+            "version_name": existing.version_name,
+            "already_existed": True,
+            "message": "A PDF with this content already exists"
+        }
+
+    timestamp = int(time.time())
+    safe_filename = pdf_file.filename.replace(" ", "_")
+    stored_filename = f"mvs_{timestamp}_{safe_filename}"
+    stored_path = os.path.join(storage_path, stored_filename)
+
+    with open(stored_path, "wb") as f:
+        f.write(content)
+
+    version = PdfVersion(
+        version_name=version_name or pdf_file.filename,
+        edition_year=edition_year,
+        file_size_bytes=len(content),
+        file_hash=file_hash,
+        storage_path=stored_path,
+        original_filename=pdf_file.filename,
+        is_active=False,
+        is_fully_parsed=False,
+        notes=notes,
+    )
+    db.add(version)
+    db.commit()
+    db.refresh(version)
+
+    return {
+        "id": version.id,
+        "version_name": version.version_name,
+        "edition_year": version.edition_year,
+        "file_size_bytes": version.file_size_bytes,
+        "file_hash": version.file_hash,
+        "storage_path": version.storage_path,
+        "original_filename": version.original_filename,
+        "is_active": version.is_active,
+        "is_fully_parsed": version.is_fully_parsed,
+        "already_existed": False,
+    }
+
+
+@app.patch("/pdf-versions/{version_id}/activate")
+async def activate_pdf_version(version_id: int, db: Session = Depends(get_db)):
+    """Set a version as the active version (deactivates all others)"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+
+    db.query(PdfVersion).update({"is_active": False})
+    version.is_active = True
+    db.commit()
+    return {"success": True, "active_version_id": version_id}
+
+
+@app.patch("/pdf-versions/{version_id}/mark-parsed")
+async def mark_pdf_version_parsed(version_id: int, db: Session = Depends(get_db)):
+    """Mark a version as fully parsed"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+
+    version.is_fully_parsed = True
+    db.commit()
+    return {"success": True, "version_id": version_id}
+
+
+@app.post("/parse-version/{version_id}/local-multipliers")
+async def parse_version_local_multipliers(version_id: int, db: Session = Depends(get_db)):
+    """Parse local multipliers from a stored PDF version"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    if not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
+
+    try:
+        result = local_multipliers.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+        return {"success": True, "records_updated": result, "pdf_version_id": version_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/parse-version/{version_id}/current-cost")
+async def parse_version_current_cost(version_id: int, db: Session = Depends(get_db)):
+    """Parse current cost multipliers from a stored PDF version"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    if not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
+
+    try:
+        result = current_cost.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+        return {"success": True, "records_updated": result, "pdf_version_id": version_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/parse-version/{version_id}/story-height")
+async def parse_version_story_height(version_id: int, db: Session = Depends(get_db)):
+    """Parse story height multipliers from a stored PDF version"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    if not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
+
+    try:
+        result = story_height.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+        return {"success": True, "records_updated": result, "pdf_version_id": version_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/parse-version/{version_id}/floor-area-perimeter")
+async def parse_version_floor_area_perimeter(version_id: int, db: Session = Depends(get_db)):
+    """Parse floor area/perimeter multipliers from a stored PDF version"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    if not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
+
+    try:
+        result = floor_area_perimeter.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+        return {"success": True, "records_updated": result, "pdf_version_id": version_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/parse-version/{version_id}/all")
+async def parse_version_all(version_id: int, db: Session = Depends(get_db)):
+    """Parse ALL table types from a stored PDF version in one call"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    if not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
+
+    results = {}
+    errors = {}
+
+    for name, parser in [
+        ("local_multipliers", local_multipliers),
+        ("current_cost", current_cost),
+        ("story_height", story_height),
+        ("floor_area_perimeter", floor_area_perimeter),
+    ]:
+        try:
+            results[name] = parser.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+        except Exception as e:
+            errors[name] = str(e)
+
+    if not errors:
+        version.is_fully_parsed = True
+        db.commit()
+
+    return {
+        "success": len(errors) == 0,
+        "pdf_version_id": version_id,
+        "results": results,
+        "errors": errors,
+    }
+
+
 @app.post("/migrate/fix-text-columns")
 async def migrate_fix_text_columns(db: Session = Depends(get_db)):
     """Migrate VARCHAR columns to TEXT for base cost rows"""
@@ -84,6 +273,7 @@ async def get_stats(db: Session = Depends(get_db)):
 @app.post("/parse/local-multipliers")
 async def parse_local_multipliers_endpoint(
     pdf_file: UploadFile = File(...),
+    pdf_version_id: int = None,
     db: Session = Depends(get_db)
 ):
     """Parse local multipliers from uploaded PDF and update database"""
@@ -94,12 +284,12 @@ async def parse_local_multipliers_endpoint(
             content = await pdf_file.read()
             f.write(content)
         
-        result = local_multipliers.parse_and_save(temp_path, db)
+        result = local_multipliers.parse_and_save(temp_path, db, pdf_version_id=pdf_version_id)
         
         # Clean up
         os.remove(temp_path)
         
-        return {"success": True, "records_updated": result}
+        return {"success": True, "records_updated": result, "pdf_version_id": pdf_version_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -107,6 +297,7 @@ async def parse_local_multipliers_endpoint(
 @app.post("/parse/current-cost")
 async def parse_current_cost_endpoint(
     pdf_file: UploadFile = File(...),
+    pdf_version_id: int = None,
     db: Session = Depends(get_db)
 ):
     """Parse current cost multipliers from uploaded PDF and update database"""
@@ -116,10 +307,10 @@ async def parse_current_cost_endpoint(
             content = await pdf_file.read()
             f.write(content)
         
-        result = current_cost.parse_and_save(temp_path, db)
+        result = current_cost.parse_and_save(temp_path, db, pdf_version_id=pdf_version_id)
         os.remove(temp_path)
         
-        return {"success": True, "records_updated": result}
+        return {"success": True, "records_updated": result, "pdf_version_id": pdf_version_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -127,6 +318,7 @@ async def parse_current_cost_endpoint(
 @app.post("/parse/story-height")
 async def parse_story_height_endpoint(
     pdf_file: UploadFile = File(...),
+    pdf_version_id: int = None,
     db: Session = Depends(get_db)
 ):
     """Parse story height multipliers from uploaded PDF and update database"""
@@ -136,10 +328,10 @@ async def parse_story_height_endpoint(
             content = await pdf_file.read()
             f.write(content)
         
-        result = story_height.parse_and_save(temp_path, db)
+        result = story_height.parse_and_save(temp_path, db, pdf_version_id=pdf_version_id)
         os.remove(temp_path)
         
-        return {"success": True, "records_updated": result}
+        return {"success": True, "records_updated": result, "pdf_version_id": pdf_version_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -147,6 +339,7 @@ async def parse_story_height_endpoint(
 @app.post("/parse/floor-area-perimeter")
 async def parse_floor_area_perimeter_endpoint(
     pdf_file: UploadFile = File(...),
+    pdf_version_id: int = None,
     db: Session = Depends(get_db)
 ):
     """Parse floor area/perimeter multipliers from uploaded PDF and update database"""
@@ -156,10 +349,10 @@ async def parse_floor_area_perimeter_endpoint(
             content = await pdf_file.read()
             f.write(content)
         
-        result = floor_area_perimeter.parse_and_save(temp_path, db)
+        result = floor_area_perimeter.parse_and_save(temp_path, db, pdf_version_id=pdf_version_id)
         os.remove(temp_path)
         
-        return {"success": True, "records_updated": result}
+        return {"success": True, "records_updated": result, "pdf_version_id": pdf_version_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -376,6 +569,7 @@ async def get_table_by_name(
 async def import_base_cost_tables(
     section: int,
     files: list[UploadFile] = File(...),
+    pdf_version_id: int = None,
     db: Session = Depends(get_db)
 ):
     """
@@ -384,6 +578,7 @@ async def import_base_cost_tables(
     Args:
         section: Section number (used for grouping and clearing existing)
         files: List of markdown files to import
+        pdf_version_id: Optional PDF version ID to associate with imported tables
     """
     try:
         import tempfile
@@ -400,11 +595,12 @@ async def import_base_cost_tables(
                 dest.write(content)
         
         # Import from directory
-        result = base_cost_tables.import_from_directory(temp_dir, db, section)
+        result = base_cost_tables.import_from_directory(temp_dir, db, section, pdf_version_id=pdf_version_id)
         
         # Clean up
         shutil.rmtree(temp_dir)
         
+        result['pdf_version_id'] = pdf_version_id
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -581,6 +777,86 @@ async def import_elevators(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============ PDF VERSION ENDPOINTS ============
+
+@app.get("/pdf-versions")
+async def list_pdf_versions(db: Session = Depends(get_db)):
+    """List all PDF versions"""
+    versions = db.query(PdfVersion).order_by(PdfVersion.created_at.desc()).all()
+    return {
+        "count": len(versions),
+        "versions": [
+            {
+                "id": v.id,
+                "version_name": v.version_name,
+                "edition_year": v.edition_year,
+                "file_size_bytes": v.file_size_bytes,
+                "is_active": v.is_active,
+                "is_fully_parsed": v.is_fully_parsed,
+                "created_at": v.created_at.isoformat() if v.created_at else None,
+            }
+            for v in versions
+        ]
+    }
+
+
+@app.get("/pdf-versions/active")
+async def get_active_pdf_version(db: Session = Depends(get_db)):
+    """Get the currently active PDF version"""
+    version = db.query(PdfVersion).filter(PdfVersion.is_active == True).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="No active PDF version set")
+    return {
+        "id": version.id,
+        "version_name": version.version_name,
+        "edition_year": version.edition_year,
+        "storage_path": version.storage_path,
+        "is_fully_parsed": version.is_fully_parsed,
+    }
+
+
+@app.get("/pdf-versions/{version_id}")
+async def get_pdf_version(version_id: int, db: Session = Depends(get_db)):
+    """Get a specific PDF version"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    return {
+        "id": version.id,
+        "version_name": version.version_name,
+        "edition_year": version.edition_year,
+        "file_size_bytes": version.file_size_bytes,
+        "file_hash": version.file_hash,
+        "storage_path": version.storage_path,
+        "original_filename": version.original_filename,
+        "is_active": version.is_active,
+        "is_fully_parsed": version.is_fully_parsed,
+        "notes": version.notes,
+        "created_at": version.created_at.isoformat() if version.created_at else None,
+    }
+
+
+@app.get("/pdf-versions/{version_id}/stats")
+async def get_pdf_version_stats(version_id: int, db: Session = Depends(get_db)):
+    """Get parsing statistics for a specific PDF version"""
+    from app.database import StoryHeightMultiplier, FloorAreaPerimeterMultiplier
+    
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    
+    return {
+        "version_id": version_id,
+        "version_name": version.version_name,
+        "local_multipliers": db.query(LocalMultiplier).filter(LocalMultiplier.pdf_version_id == version_id).count(),
+        "current_cost_multipliers": db.query(CurrentCostMultiplier).filter(CurrentCostMultiplier.pdf_version_id == version_id).count(),
+        "story_height_multipliers": db.query(StoryHeightMultiplier).filter(StoryHeightMultiplier.pdf_version_id == version_id).count(),
+        "floor_area_perimeter_multipliers": db.query(FloorAreaPerimeterMultiplier).filter(FloorAreaPerimeterMultiplier.pdf_version_id == version_id).count(),
+        "base_cost_tables": db.query(BaseCostTable).filter(BaseCostTable.pdf_version_id == version_id).count(),
+        "elevator_types": db.query(ElevatorType).filter(ElevatorType.pdf_version_id == version_id).count(),
+    }
 
 
 if __name__ == "__main__":

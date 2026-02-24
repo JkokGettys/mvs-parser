@@ -6,6 +6,25 @@ from sqlalchemy.sql import func
 
 Base = declarative_base()
 
+
+class PdfVersion(Base):
+    """PDF version metadata for tracking different MVS editions"""
+    __tablename__ = 'mvs_pdf_versions'
+    
+    id = Column(Integer, primary_key=True)
+    version_name = Column(String(100), nullable=False)
+    edition_year = Column(Integer, nullable=True)
+    file_size_bytes = Column(Integer, nullable=True)
+    file_hash = Column(String(64), nullable=True)
+    storage_path = Column(String(500), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=False)
+    is_fully_parsed = Column(Boolean, default=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 # Lazy initialization - don't connect at import time
 _engine = None
 _SessionLocal = None
@@ -47,6 +66,7 @@ class LocalMultiplier(Base):
     class_s = Column(Numeric(5, 3), nullable=False)
     source_page = Column(Integer, nullable=False)
     is_regional = Column(Boolean, default=False)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -61,6 +81,7 @@ class CurrentCostMultiplier(Base):
     effective_date = Column(String(20), nullable=False)
     multiplier = Column(Numeric(5, 3), nullable=False)
     source_page = Column(Integer, nullable=False)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -74,6 +95,7 @@ class StoryHeightMultiplier(Base):
     sqft_multiplier = Column(Numeric(6, 4), nullable=False)
     cuft_multiplier = Column(Numeric(6, 4), nullable=False)
     source_page = Column(Integer, default=90)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -86,6 +108,7 @@ class FloorAreaPerimeterMultiplier(Base):
     perimeter_ft = Column(Integer, nullable=False)
     multiplier = Column(Numeric(6, 4), nullable=False)
     source_page = Column(Integer, default=90)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -113,6 +136,7 @@ class BaseCostTable(Base):
     pdf_page = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
     file_name = Column(String(255), nullable=True)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     
@@ -158,6 +182,7 @@ class ElevatorType(Base):
     category = Column(String(50), nullable=False)  # 'passenger' or 'freight'
     name = Column(String(255), nullable=False)
     source_page = Column(Integer, default=701)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     
