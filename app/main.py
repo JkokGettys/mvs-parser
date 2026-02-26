@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import os
 
-from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier, ElevatorType, ElevatorCost, ElevatorCostPerStop, PdfVersion
+from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier, StoryHeightMultiplier, FloorAreaPerimeterMultiplier, SprinklerCost, ElevatorType, ElevatorCost, ElevatorCostPerStop, PdfVersion
 from app.parsers import local_multipliers, current_cost, story_height, floor_area_perimeter
 from app.parsers import base_cost_tables
 
@@ -173,8 +173,8 @@ async def parse_version_current_cost(version_id: int, db: Session = Depends(get_
 
 
 @app.post("/parse-version/{version_id}/story-height")
-async def parse_version_story_height(version_id: int, db: Session = Depends(get_db)):
-    """Parse story height multipliers from a stored PDF version"""
+async def parse_version_story_height(version_id: int, section: int = 11, db: Session = Depends(get_db)):
+    """Parse story height multipliers from a stored PDF version for a specific section"""
     version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
     if not version:
         raise HTTPException(status_code=404, detail="PDF version not found")
@@ -182,15 +182,32 @@ async def parse_version_story_height(version_id: int, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
     try:
-        result = story_height.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
-        return {"success": True, "records_updated": result, "pdf_version_id": version_id}
+        page = story_height.SECTION_STORY_HEIGHT_PAGES.get(section, 90)
+        result = story_height.parse_and_save(version.storage_path, db, page=page, section=section, pdf_version_id=version_id)
+        return {"success": True, "records_updated": result, "section": section, "pdf_version_id": version_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/parse-version/{version_id}/story-height/all-sections")
+async def parse_version_story_height_all(version_id: int, db: Session = Depends(get_db)):
+    """Parse story height multipliers for ALL known sections from a stored PDF version"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    if not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
+
+    try:
+        results = story_height.parse_all_sections(version.storage_path, db, pdf_version_id=version_id)
+        return {"success": True, "sections": results, "pdf_version_id": version_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/parse-version/{version_id}/floor-area-perimeter")
-async def parse_version_floor_area_perimeter(version_id: int, db: Session = Depends(get_db)):
-    """Parse floor area/perimeter multipliers from a stored PDF version"""
+async def parse_version_floor_area_perimeter(version_id: int, section: int = 11, db: Session = Depends(get_db)):
+    """Parse floor area/perimeter multipliers from a stored PDF version for a specific section"""
     version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
     if not version:
         raise HTTPException(status_code=404, detail="PDF version not found")
@@ -198,8 +215,24 @@ async def parse_version_floor_area_perimeter(version_id: int, db: Session = Depe
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
     try:
-        result = floor_area_perimeter.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
-        return {"success": True, "records_updated": result, "pdf_version_id": version_id}
+        result = floor_area_perimeter.parse_and_save_section(version.storage_path, db, section=section, pdf_version_id=version_id)
+        return {"success": True, "records_updated": result, "section": section, "pdf_version_id": version_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/parse-version/{version_id}/floor-area-perimeter/all-sections")
+async def parse_version_floor_area_perimeter_all(version_id: int, db: Session = Depends(get_db)):
+    """Parse floor area/perimeter multipliers for ALL known sections from a stored PDF version"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    if not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
+
+    try:
+        results = floor_area_perimeter.parse_all_sections(version.storage_path, db, pdf_version_id=version_id)
+        return {"success": True, "sections": results, "pdf_version_id": version_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -216,16 +249,26 @@ async def parse_version_all(version_id: int, db: Session = Depends(get_db)):
     results = {}
     errors = {}
 
+    # Parse global multipliers (not section-specific)
     for name, parser in [
         ("local_multipliers", local_multipliers),
         ("current_cost", current_cost),
-        ("story_height", story_height),
-        ("floor_area_perimeter", floor_area_perimeter),
     ]:
         try:
             results[name] = parser.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
         except Exception as e:
             errors[name] = str(e)
+    
+    # Parse section-specific refinements for all known sections
+    try:
+        results["story_height"] = story_height.parse_all_sections(version.storage_path, db, pdf_version_id=version_id)
+    except Exception as e:
+        errors["story_height"] = str(e)
+    
+    try:
+        results["floor_area_perimeter"] = floor_area_perimeter.parse_all_sections(version.storage_path, db, pdf_version_id=version_id)
+    except Exception as e:
+        errors["floor_area_perimeter"] = str(e)
 
     if not errors:
         version.is_fully_parsed = True
@@ -255,14 +298,39 @@ async def migrate_fix_text_columns(db: Session = Depends(get_db)):
 
 @app.get("/stats")
 async def get_stats(db: Session = Depends(get_db)):
-    """Get current record counts from database"""
-    from app.database import LocalMultiplier, CurrentCostMultiplier, StoryHeightMultiplier, FloorAreaPerimeterMultiplier
+    """Get current record counts from database, with per-section breakdown for refinements"""
+    from sqlalchemy import func as sqla_func
+    
+    # Per-section counts for story height
+    sh_sections = db.query(
+        StoryHeightMultiplier.section, sqla_func.count(StoryHeightMultiplier.id)
+    ).group_by(StoryHeightMultiplier.section).all()
+    
+    # Per-section counts for floor area/perimeter
+    fap_sections = db.query(
+        FloorAreaPerimeterMultiplier.section, sqla_func.count(FloorAreaPerimeterMultiplier.id)
+    ).group_by(FloorAreaPerimeterMultiplier.section).all()
+    
+    # Per-section counts for sprinklers
+    spr_sections = db.query(
+        SprinklerCost.section, sqla_func.count(SprinklerCost.id)
+    ).group_by(SprinklerCost.section).all()
     
     return {
         "local_multipliers": db.query(LocalMultiplier).count(),
         "current_cost_multipliers": db.query(CurrentCostMultiplier).count(),
-        "story_height_multipliers": db.query(StoryHeightMultiplier).count(),
-        "floor_area_perimeter_multipliers": db.query(FloorAreaPerimeterMultiplier).count(),
+        "story_height_multipliers": {
+            "total": db.query(StoryHeightMultiplier).count(),
+            "by_section": {s: c for s, c in sh_sections},
+        },
+        "floor_area_perimeter_multipliers": {
+            "total": db.query(FloorAreaPerimeterMultiplier).count(),
+            "by_section": {s: c for s, c in fap_sections},
+        },
+        "sprinkler_costs": {
+            "total": db.query(SprinklerCost).count(),
+            "by_section": {s: c for s, c in spr_sections},
+        },
         "base_cost_tables": db.query(BaseCostTable).count(),
         "base_cost_rows": db.query(BaseCostRow).count(),
         "elevator_types": db.query(ElevatorType).count(),
@@ -318,20 +386,22 @@ async def parse_current_cost_endpoint(
 @app.post("/parse/story-height")
 async def parse_story_height_endpoint(
     pdf_file: UploadFile = File(...),
+    section: int = 11,
     pdf_version_id: int = None,
     db: Session = Depends(get_db)
 ):
-    """Parse story height multipliers from uploaded PDF and update database"""
+    """Parse story height multipliers from uploaded PDF for a specific section"""
     try:
         temp_path = f"/tmp/{pdf_file.filename}"
         with open(temp_path, "wb") as f:
             content = await pdf_file.read()
             f.write(content)
         
-        result = story_height.parse_and_save(temp_path, db, pdf_version_id=pdf_version_id)
+        page = story_height.SECTION_STORY_HEIGHT_PAGES.get(section, 90)
+        result = story_height.parse_and_save(temp_path, db, page=page, section=section, pdf_version_id=pdf_version_id)
         os.remove(temp_path)
         
-        return {"success": True, "records_updated": result, "pdf_version_id": pdf_version_id}
+        return {"success": True, "records_updated": result, "section": section, "pdf_version_id": pdf_version_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -339,20 +409,21 @@ async def parse_story_height_endpoint(
 @app.post("/parse/floor-area-perimeter")
 async def parse_floor_area_perimeter_endpoint(
     pdf_file: UploadFile = File(...),
+    section: int = 11,
     pdf_version_id: int = None,
     db: Session = Depends(get_db)
 ):
-    """Parse floor area/perimeter multipliers from uploaded PDF and update database"""
+    """Parse floor area/perimeter multipliers from uploaded PDF for a specific section"""
     try:
         temp_path = f"/tmp/{pdf_file.filename}"
         with open(temp_path, "wb") as f:
             content = await pdf_file.read()
             f.write(content)
         
-        result = floor_area_perimeter.parse_and_save(temp_path, db, pdf_version_id=pdf_version_id)
+        result = floor_area_perimeter.parse_and_save_section(temp_path, db, section=section, pdf_version_id=pdf_version_id)
         os.remove(temp_path)
         
-        return {"success": True, "records_updated": result, "pdf_version_id": pdf_version_id}
+        return {"success": True, "records_updated": result, "section": section, "pdf_version_id": pdf_version_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -467,6 +538,137 @@ async def list_current_cost_regions(db: Session = Depends(get_db)):
     """Get unique regions for current cost multipliers"""
     results = db.query(CurrentCostMultiplier.region).distinct().all()
     return {"regions": [r.region for r in results]}
+
+
+# ============ STORY HEIGHT MULTIPLIER ENDPOINTS ============
+
+@app.get("/story-height-multipliers")
+async def list_story_height_multipliers(
+    section: int = None,
+    db: Session = Depends(get_db)
+):
+    """List story height multipliers, optionally filtered by section"""
+    query = db.query(StoryHeightMultiplier)
+    if section is not None:
+        query = query.filter(StoryHeightMultiplier.section == section)
+    
+    multipliers = query.order_by(StoryHeightMultiplier.section, StoryHeightMultiplier.height_feet).all()
+    
+    return {
+        "count": len(multipliers),
+        "multipliers": [
+            {
+                "id": m.id,
+                "section": m.section,
+                "height_meters": float(m.height_meters) if m.height_meters else None,
+                "height_feet": m.height_feet,
+                "sqft_multiplier": float(m.sqft_multiplier) if m.sqft_multiplier else None,
+                "cuft_multiplier": float(m.cuft_multiplier) if m.cuft_multiplier else None,
+                "source_page": m.source_page,
+            }
+            for m in multipliers
+        ]
+    }
+
+
+@app.get("/story-height-multipliers/sections")
+async def list_story_height_sections(db: Session = Depends(get_db)):
+    """Get sections that have story height multiplier data"""
+    from sqlalchemy import func as sqla_func
+    results = db.query(
+        StoryHeightMultiplier.section, sqla_func.count(StoryHeightMultiplier.id)
+    ).group_by(StoryHeightMultiplier.section).order_by(StoryHeightMultiplier.section).all()
+    return {"sections": [{"section": s, "count": c} for s, c in results]}
+
+
+# ============ FLOOR AREA / PERIMETER MULTIPLIER ENDPOINTS ============
+
+@app.get("/floor-area-perimeter-multipliers")
+async def list_floor_area_perimeter_multipliers(
+    section: int = None,
+    db: Session = Depends(get_db)
+):
+    """List floor area/perimeter multipliers, optionally filtered by section"""
+    query = db.query(FloorAreaPerimeterMultiplier)
+    if section is not None:
+        query = query.filter(FloorAreaPerimeterMultiplier.section == section)
+    
+    multipliers = query.order_by(
+        FloorAreaPerimeterMultiplier.section,
+        FloorAreaPerimeterMultiplier.floor_area_sqft,
+        FloorAreaPerimeterMultiplier.perimeter_ft
+    ).all()
+    
+    return {
+        "count": len(multipliers),
+        "multipliers": [
+            {
+                "id": m.id,
+                "section": m.section,
+                "floor_area_sqft": m.floor_area_sqft,
+                "perimeter_ft": m.perimeter_ft,
+                "multiplier": float(m.multiplier) if m.multiplier else None,
+                "source_page": m.source_page,
+            }
+            for m in multipliers
+        ]
+    }
+
+
+@app.get("/floor-area-perimeter-multipliers/sections")
+async def list_fap_sections(db: Session = Depends(get_db)):
+    """Get sections that have floor area/perimeter multiplier data"""
+    from sqlalchemy import func as sqla_func
+    results = db.query(
+        FloorAreaPerimeterMultiplier.section, sqla_func.count(FloorAreaPerimeterMultiplier.id)
+    ).group_by(FloorAreaPerimeterMultiplier.section).order_by(FloorAreaPerimeterMultiplier.section).all()
+    return {"sections": [{"section": s, "count": c} for s, c in results]}
+
+
+# ============ SPRINKLER COST ENDPOINTS ============
+
+@app.get("/sprinkler-costs")
+async def list_sprinkler_costs(
+    section: int = None,
+    system_type: str = None,
+    db: Session = Depends(get_db)
+):
+    """List sprinkler costs, optionally filtered by section and system type"""
+    query = db.query(SprinklerCost)
+    if section is not None:
+        query = query.filter(SprinklerCost.section == section)
+    if system_type:
+        query = query.filter(SprinklerCost.system_type == system_type)
+    
+    costs = query.order_by(SprinklerCost.section, SprinklerCost.system_type, SprinklerCost.coverage_sqft).all()
+    
+    return {
+        "count": len(costs),
+        "costs": [
+            {
+                "id": c.id,
+                "section": c.section,
+                "system_type": c.system_type,
+                "coverage_sqft": c.coverage_sqft,
+                "quality_low": float(c.quality_low) if c.quality_low else None,
+                "quality_avg": float(c.quality_avg) if c.quality_avg else None,
+                "quality_good": float(c.quality_good) if c.quality_good else None,
+                "quality_excl": float(c.quality_excl) if c.quality_excl else None,
+                "source_page": c.source_page,
+            }
+            for c in costs
+        ]
+    }
+
+
+@app.get("/sprinkler-costs/sections")
+async def list_sprinkler_sections(db: Session = Depends(get_db)):
+    """Get sections that have sprinkler cost data"""
+    from sqlalchemy import func as sqla_func
+    results = db.query(
+        SprinklerCost.section, sqla_func.count(SprinklerCost.id)
+    ).group_by(SprinklerCost.section).order_by(SprinklerCost.section).all()
+    return {"sections": [{"section": s, "count": c} for s, c in results]}
 
 
 # ============ BASE COST TABLE ENDPOINTS ============

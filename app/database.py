@@ -90,6 +90,7 @@ class StoryHeightMultiplier(Base):
     __tablename__ = 'mvs_story_height_multipliers'
     
     id = Column(Integer, primary_key=True)
+    section = Column(Integer, nullable=False, default=11)
     height_meters = Column(Numeric(6, 2), nullable=False)
     height_feet = Column(Integer, nullable=False)
     sqft_multiplier = Column(Numeric(6, 4), nullable=False)
@@ -98,12 +99,17 @@ class StoryHeightMultiplier(Base):
     pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('ix_story_height_section_feet', 'section', 'height_feet'),
+    )
 
 
 class FloorAreaPerimeterMultiplier(Base):
     __tablename__ = 'mvs_floor_area_perimeter_multipliers'
     
     id = Column(Integer, primary_key=True)
+    section = Column(Integer, nullable=False, default=11)
     floor_area_sqft = Column(Integer, nullable=False)
     perimeter_ft = Column(Integer, nullable=False)
     multiplier = Column(Numeric(6, 4), nullable=False)
@@ -111,6 +117,32 @@ class FloorAreaPerimeterMultiplier(Base):
     pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('ix_fap_section_area_perimeter', 'section', 'floor_area_sqft', 'perimeter_ft'),
+    )
+
+
+class SprinklerCost(Base):
+    """Sprinkler cost refinements, section-specific"""
+    __tablename__ = 'mvs_sprinkler_costs'
+    
+    id = Column(Integer, primary_key=True)
+    section = Column(Integer, nullable=False, default=11)
+    system_type = Column(String(20), nullable=False)  # 'wet' or 'dry'
+    coverage_sqft = Column(Integer, nullable=False)
+    quality_low = Column(Numeric(6, 2), nullable=True)
+    quality_avg = Column(Numeric(6, 2), nullable=True)
+    quality_good = Column(Numeric(6, 2), nullable=True)
+    quality_excl = Column(Numeric(6, 2), nullable=True)
+    source_page = Column(Integer, nullable=True)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('ix_sprinkler_section_type_coverage', 'section', 'system_type', 'coverage_sqft'),
+    )
 
 
 class RegionMapping(Base):
