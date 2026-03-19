@@ -51,6 +51,25 @@ def get_session_local():
     return _SessionLocal
 
 
+class ParseRun(Base):
+    """Tracks individual parser executions against a PDF version"""
+    __tablename__ = 'mvs_parse_runs'
+    
+    id = Column(Integer, primary_key=True)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id', ondelete='CASCADE'), nullable=False)
+    parser_name = Column(String(80), nullable=False)  # e.g. 'local_multipliers', 'story_height_s11'
+    status = Column(String(20), nullable=False, default='pending')  # pending, running, success, failed
+    records_created = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        Index('ix_parse_run_version_parser', 'pdf_version_id', 'parser_name'),
+    )
+
+
 class LocalMultiplier(Base):
     __tablename__ = 'mvs_local_multipliers'
     
@@ -142,6 +161,28 @@ class SprinklerCost(Base):
     
     __table_args__ = (
         Index('ix_sprinkler_section_type_coverage', 'section', 'system_type', 'coverage_sqft'),
+    )
+
+
+class HvacCost(Base):
+    """HVAC/climate adjustment cost refinements, section-specific"""
+    __tablename__ = 'mvs_hvac_costs'
+    
+    id = Column(Integer, primary_key=True)
+    section = Column(Integer, nullable=False, default=11)
+    category = Column(String(30), nullable=False)  # 'heating_only', 'heating_and_cooling', 'cooling_only', 'ventilation_only'
+    hvac_type = Column(String(80), nullable=False)  # e.g. 'electric_cable_baseboard'
+    label = Column(String(255), nullable=False)  # Human-readable label
+    cost_mild = Column(Numeric(8, 2), nullable=True)
+    cost_moderate = Column(Numeric(8, 2), nullable=True)
+    cost_extreme = Column(Numeric(8, 2), nullable=True)
+    source_page = Column(Integer, nullable=True)
+    pdf_version_id = Column(Integer, ForeignKey('mvs_pdf_versions.id'), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('ix_hvac_section_category_type', 'section', 'category', 'hvac_type'),
     )
 
 

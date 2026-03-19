@@ -1,3 +1,12 @@
+FROM node:18-slim AS frontend-builder
+
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+COPY frontend/ .
+RUN npm run build
+
+
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -14,6 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+
+# Copy built frontend from builder stage
+COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
 # Expose port
 EXPOSE 8000

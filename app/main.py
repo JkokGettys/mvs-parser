@@ -1,10 +1,15 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from datetime import datetime
 import os
 
-from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier, StoryHeightMultiplier, FloorAreaPerimeterMultiplier, SprinklerCost, ElevatorType, ElevatorCost, ElevatorCostPerStop, PdfVersion
+from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier, StoryHeightMultiplier, FloorAreaPerimeterMultiplier, SprinklerCost, HvacCost, ElevatorType, ElevatorCost, ElevatorCostPerStop, PdfVersion, ParseRun
 from app.parsers import local_multipliers, current_cost, story_height, floor_area_perimeter
 from app.parsers import base_cost_tables
 
@@ -43,6 +48,70 @@ async def startup():
         print("[MVS Parser Service] TEXT columns migration completed")
     except Exception as e:
         print(f"[MVS Parser Service] Migration skipped or failed: {e}")
+
+
+# ============ KNOWN PARSERS REGISTRY ============
+# Defines ALL parsers that should run for a complete parse
+KNOWN_PARSERS = [
+    {"name": "local_multipliers", "label": "Local Multipliers", "description": "Location-based cost adjustment multipliers (865+ entries)", "section": None},
+    {"name": "current_cost", "label": "Current Cost Multipliers", "description": "Time-based cost adjustment multipliers by region/class/date", "section": None},
+    {"name": "story_height_s11", "label": "Story Height - S11", "description": "Height multipliers for Apartments & Hotels (Section 11)", "section": 11},
+    {"name": "story_height_s13", "label": "Story Height - S13", "description": "Height multipliers for Stores & Commercial (Section 13)", "section": 13},
+    {"name": "story_height_s14", "label": "Story Height - S14", "description": "Height multipliers for Garages & Industrial (Section 14)", "section": 14},
+    {"name": "story_height_s15", "label": "Story Height - S15", "description": "Height multipliers for Offices & Medical (Section 15)", "section": 15},
+    {"name": "floor_area_perimeter_s11", "label": "Floor Area/Perimeter - S11", "description": "Size/shape multipliers for Apartments & Hotels", "section": 11},
+    {"name": "floor_area_perimeter_s13", "label": "Floor Area/Perimeter - S13", "description": "Size/shape multipliers for Stores & Commercial", "section": 13},
+    {"name": "floor_area_perimeter_s14", "label": "Floor Area/Perimeter - S14", "description": "Size/shape multipliers for Garages & Industrial", "section": 14},
+    {"name": "floor_area_perimeter_s15", "label": "Floor Area/Perimeter - S15", "description": "Size/shape multipliers for Offices & Medical", "section": 15},
+    {"name": "base_cost_tables_s11", "label": "Base Cost Tables - S11", "description": "Base cost tables for Section 11 building types", "section": 11},
+    {"name": "base_cost_tables_s13", "label": "Base Cost Tables - S13", "description": "Base cost tables for Section 13 building types", "section": 13},
+    {"name": "base_cost_tables_s14", "label": "Base Cost Tables - S14", "description": "Base cost tables for Section 14 building types", "section": 14},
+    {"name": "base_cost_tables_s15", "label": "Base Cost Tables - S15", "description": "Base cost tables for Section 15 building types", "section": 15},
+    {"name": "sprinklers", "label": "Sprinkler Costs", "description": "Sprinkler system cost refinements (all sections)", "section": None},
+    {"name": "hvac", "label": "HVAC Costs", "description": "HVAC/climate adjustment costs (all sections)", "section": None},
+    {"name": "elevators", "label": "Elevator Costs", "description": "Elevator cost data from Section 58", "section": None},
+]
+
+
+def start_parse_run(db: Session, version_id: int, parser_name: str) -> ParseRun:
+    """Create or reset a parse run record and mark it as running"""
+    run = db.query(ParseRun).filter(
+        ParseRun.pdf_version_id == version_id,
+        ParseRun.parser_name == parser_name
+    ).first()
+    if run:
+        run.status = 'running'
+        run.records_created = 0
+        run.error_message = None
+        run.started_at = datetime.utcnow()
+        run.completed_at = None
+    else:
+        run = ParseRun(
+            pdf_version_id=version_id,
+            parser_name=parser_name,
+            status='running',
+            started_at=datetime.utcnow(),
+        )
+        db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def complete_parse_run(db: Session, run: ParseRun, records: int):
+    """Mark a parse run as successful"""
+    run.status = 'success'
+    run.records_created = records
+    run.completed_at = datetime.utcnow()
+    db.commit()
+
+
+def fail_parse_run(db: Session, run: ParseRun, error: str):
+    """Mark a parse run as failed"""
+    run.status = 'failed'
+    run.error_message = error[:2000]
+    run.completed_at = datetime.utcnow()
+    db.commit()
 
 
 @app.get("/health")
@@ -149,10 +218,13 @@ async def parse_version_local_multipliers(version_id: int, db: Session = Depends
     if not os.path.exists(version.storage_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
+    run = start_parse_run(db, version_id, "local_multipliers")
     try:
         result = local_multipliers.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+        complete_parse_run(db, run, result)
         return {"success": True, "records_updated": result, "pdf_version_id": version_id}
     except Exception as e:
+        fail_parse_run(db, run, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -165,10 +237,13 @@ async def parse_version_current_cost(version_id: int, db: Session = Depends(get_
     if not os.path.exists(version.storage_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
+    run = start_parse_run(db, version_id, "current_cost")
     try:
         result = current_cost.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+        complete_parse_run(db, run, result)
         return {"success": True, "records_updated": result, "pdf_version_id": version_id}
     except Exception as e:
+        fail_parse_run(db, run, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -181,11 +256,14 @@ async def parse_version_story_height(version_id: int, section: int = 11, db: Ses
     if not os.path.exists(version.storage_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
+    run = start_parse_run(db, version_id, f"story_height_s{section}")
     try:
         page = story_height.SECTION_STORY_HEIGHT_PAGES.get(section, 90)
         result = story_height.parse_and_save(version.storage_path, db, page=page, section=section, pdf_version_id=version_id)
+        complete_parse_run(db, run, result)
         return {"success": True, "records_updated": result, "section": section, "pdf_version_id": version_id}
     except Exception as e:
+        fail_parse_run(db, run, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -198,11 +276,19 @@ async def parse_version_story_height_all(version_id: int, db: Session = Depends(
     if not os.path.exists(version.storage_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
-    try:
-        results = story_height.parse_all_sections(version.storage_path, db, pdf_version_id=version_id)
-        return {"success": True, "sections": results, "pdf_version_id": version_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    section_results = {}
+    for section in story_height.SECTION_STORY_HEIGHT_PAGES.keys():
+        run = start_parse_run(db, version_id, f"story_height_s{section}")
+        try:
+            page = story_height.SECTION_STORY_HEIGHT_PAGES[section]
+            result = story_height.parse_and_save(version.storage_path, db, page=page, section=section, pdf_version_id=version_id)
+            complete_parse_run(db, run, result)
+            section_results[section] = result
+        except Exception as e:
+            fail_parse_run(db, run, str(e))
+            section_results[section] = {"error": str(e)}
+
+    return {"success": True, "sections": section_results, "pdf_version_id": version_id}
 
 
 @app.post("/parse-version/{version_id}/floor-area-perimeter")
@@ -214,10 +300,13 @@ async def parse_version_floor_area_perimeter(version_id: int, section: int = 11,
     if not os.path.exists(version.storage_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
+    run = start_parse_run(db, version_id, f"floor_area_perimeter_s{section}")
     try:
         result = floor_area_perimeter.parse_and_save_section(version.storage_path, db, section=section, pdf_version_id=version_id)
+        complete_parse_run(db, run, result)
         return {"success": True, "records_updated": result, "section": section, "pdf_version_id": version_id}
     except Exception as e:
+        fail_parse_run(db, run, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -230,11 +319,18 @@ async def parse_version_floor_area_perimeter_all(version_id: int, db: Session = 
     if not os.path.exists(version.storage_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
-    try:
-        results = floor_area_perimeter.parse_all_sections(version.storage_path, db, pdf_version_id=version_id)
-        return {"success": True, "sections": results, "pdf_version_id": version_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    section_results = {}
+    for section in floor_area_perimeter.SECTION_FAP_PAGES.keys():
+        run = start_parse_run(db, version_id, f"floor_area_perimeter_s{section}")
+        try:
+            result = floor_area_perimeter.parse_and_save_section(version.storage_path, db, section=section, pdf_version_id=version_id)
+            complete_parse_run(db, run, result)
+            section_results[section] = result
+        except Exception as e:
+            fail_parse_run(db, run, str(e))
+            section_results[section] = {"error": str(e)}
+
+    return {"success": True, "sections": section_results, "pdf_version_id": version_id}
 
 
 @app.post("/parse-version/{version_id}/all")
@@ -254,21 +350,39 @@ async def parse_version_all(version_id: int, db: Session = Depends(get_db)):
         ("local_multipliers", local_multipliers),
         ("current_cost", current_cost),
     ]:
+        run = start_parse_run(db, version_id, name)
         try:
-            results[name] = parser.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+            count = parser.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
+            complete_parse_run(db, run, count)
+            results[name] = count
         except Exception as e:
+            fail_parse_run(db, run, str(e))
             errors[name] = str(e)
     
-    # Parse section-specific refinements for all known sections
-    try:
-        results["story_height"] = story_height.parse_all_sections(version.storage_path, db, pdf_version_id=version_id)
-    except Exception as e:
-        errors["story_height"] = str(e)
+    # Parse section-specific story height for all known sections
+    for section in story_height.SECTION_STORY_HEIGHT_PAGES.keys():
+        parser_name = f"story_height_s{section}"
+        run = start_parse_run(db, version_id, parser_name)
+        try:
+            page = story_height.SECTION_STORY_HEIGHT_PAGES[section]
+            count = story_height.parse_and_save(version.storage_path, db, page=page, section=section, pdf_version_id=version_id)
+            complete_parse_run(db, run, count)
+            results[parser_name] = count
+        except Exception as e:
+            fail_parse_run(db, run, str(e))
+            errors[parser_name] = str(e)
     
-    try:
-        results["floor_area_perimeter"] = floor_area_perimeter.parse_all_sections(version.storage_path, db, pdf_version_id=version_id)
-    except Exception as e:
-        errors["floor_area_perimeter"] = str(e)
+    # Parse section-specific floor area/perimeter for all known sections
+    for section in floor_area_perimeter.SECTION_FAP_PAGES.keys():
+        parser_name = f"floor_area_perimeter_s{section}"
+        run = start_parse_run(db, version_id, parser_name)
+        try:
+            count = floor_area_perimeter.parse_and_save_section(version.storage_path, db, section=section, pdf_version_id=version_id)
+            complete_parse_run(db, run, count)
+            results[parser_name] = count
+        except Exception as e:
+            fail_parse_run(db, run, str(e))
+            errors[parser_name] = str(e)
 
     if not errors:
         version.is_fully_parsed = True
@@ -316,6 +430,11 @@ async def get_stats(db: Session = Depends(get_db)):
         SprinklerCost.section, sqla_func.count(SprinklerCost.id)
     ).group_by(SprinklerCost.section).all()
     
+    # Per-section counts for HVAC
+    hvac_sections = db.query(
+        HvacCost.section, sqla_func.count(HvacCost.id)
+    ).group_by(HvacCost.section).all()
+    
     return {
         "local_multipliers": db.query(LocalMultiplier).count(),
         "current_cost_multipliers": db.query(CurrentCostMultiplier).count(),
@@ -330,6 +449,10 @@ async def get_stats(db: Session = Depends(get_db)):
         "sprinkler_costs": {
             "total": db.query(SprinklerCost).count(),
             "by_section": {s: c for s, c in spr_sections},
+        },
+        "hvac_costs": {
+            "total": db.query(HvacCost).count(),
+            "by_section": {s: c for s, c in hvac_sections},
         },
         "base_cost_tables": db.query(BaseCostTable).count(),
         "base_cost_rows": db.query(BaseCostRow).count(),
@@ -669,6 +792,115 @@ async def list_sprinkler_sections(db: Session = Depends(get_db)):
         SprinklerCost.section, sqla_func.count(SprinklerCost.id)
     ).group_by(SprinklerCost.section).order_by(SprinklerCost.section).all()
     return {"sections": [{"section": s, "count": c} for s, c in results]}
+
+
+# ============ HVAC COST ENDPOINTS ============
+
+@app.get("/hvac-costs")
+async def list_hvac_costs(
+    section: int = None,
+    category: str = None,
+    db: Session = Depends(get_db)
+):
+    """List HVAC costs, optionally filtered by section and category"""
+    query = db.query(HvacCost)
+    if section is not None:
+        query = query.filter(HvacCost.section == section)
+    if category:
+        query = query.filter(HvacCost.category == category)
+    
+    costs = query.order_by(HvacCost.section, HvacCost.category, HvacCost.hvac_type).all()
+    
+    return {
+        "count": len(costs),
+        "costs": [
+            {
+                "id": c.id,
+                "section": c.section,
+                "category": c.category,
+                "hvac_type": c.hvac_type,
+                "label": c.label,
+                "cost_mild": float(c.cost_mild) if c.cost_mild else None,
+                "cost_moderate": float(c.cost_moderate) if c.cost_moderate else None,
+                "cost_extreme": float(c.cost_extreme) if c.cost_extreme else None,
+                "source_page": c.source_page,
+            }
+            for c in costs
+        ]
+    }
+
+
+@app.get("/hvac-costs/sections")
+async def list_hvac_sections(db: Session = Depends(get_db)):
+    """Get sections that have HVAC cost data"""
+    from sqlalchemy import func as sqla_func
+    results = db.query(
+        HvacCost.section, sqla_func.count(HvacCost.id)
+    ).group_by(HvacCost.section).order_by(HvacCost.section).all()
+    return {"sections": [{"section": s, "count": c} for s, c in results]}
+
+
+@app.get("/hvac-costs/categories")
+async def list_hvac_categories(section: int = None, db: Session = Depends(get_db)):
+    """Get available HVAC categories, optionally for a specific section"""
+    query = db.query(HvacCost.section, HvacCost.category).distinct()
+    if section is not None:
+        query = query.filter(HvacCost.section == section)
+    results = query.order_by(HvacCost.section, HvacCost.category).all()
+    return {"categories": [{"section": s, "category": c} for s, c in results]}
+
+
+@app.post("/import/hvac-costs")
+async def import_hvac_costs(
+    json_file: UploadFile = File(...),
+    section: int = 11,
+    db: Session = Depends(get_db)
+):
+    """
+    Import HVAC cost data from uploaded JSON file (S11_hvac.json format).
+    Clears existing data for the given section before importing.
+    """
+    import json as json_lib
+    
+    try:
+        content = await json_file.read()
+        data = json_lib.loads(content.decode('utf-8'))
+        
+        # Clear existing HVAC data for this section
+        db.query(HvacCost).filter(HvacCost.section == section).delete()
+        db.commit()
+        
+        source_page = data.get('metadata', {}).get('pdf_page', 88)
+        imported = 0
+        
+        categories = data.get('categories', {})
+        for cat_key, cat_data in categories.items():
+            items = cat_data.get('items', [])
+            for item in items:
+                entry = HvacCost(
+                    section=section,
+                    category=cat_key,
+                    hvac_type=item['type'],
+                    label=item['label'],
+                    cost_mild=item.get('mild'),
+                    cost_moderate=item.get('moderate'),
+                    cost_extreme=item.get('extreme'),
+                    source_page=source_page,
+                )
+                db.add(entry)
+                imported += 1
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "section": section,
+            "imported": imported,
+            "source_page": source_page,
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============ BASE COST TABLE ENDPOINTS ============
@@ -1059,6 +1291,140 @@ async def get_pdf_version_stats(version_id: int, db: Session = Depends(get_db)):
         "base_cost_tables": db.query(BaseCostTable).filter(BaseCostTable.pdf_version_id == version_id).count(),
         "elevator_types": db.query(ElevatorType).filter(ElevatorType.pdf_version_id == version_id).count(),
     }
+
+
+# ============ ADMIN API ENDPOINTS ============
+
+@app.get("/parsers")
+async def list_parsers():
+    """Return the registry of all known parsers"""
+    return {"parsers": KNOWN_PARSERS}
+
+
+@app.get("/pdf-versions/{version_id}/parse-runs")
+async def list_parse_runs(version_id: int, db: Session = Depends(get_db)):
+    """Get all parse run records for a specific PDF version, merged with the known parsers list"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    
+    runs = db.query(ParseRun).filter(ParseRun.pdf_version_id == version_id).all()
+    run_map = {r.parser_name: r for r in runs}
+    
+    result = []
+    for p in KNOWN_PARSERS:
+        run = run_map.get(p["name"])
+        result.append({
+            "parser_name": p["name"],
+            "label": p["label"],
+            "description": p["description"],
+            "section": p["section"],
+            "status": run.status if run else "not_started",
+            "records_created": run.records_created if run else 0,
+            "error_message": run.error_message if run else None,
+            "started_at": run.started_at.isoformat() if run and run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run and run.completed_at else None,
+        })
+    
+    return {"version_id": version_id, "parse_runs": result}
+
+
+@app.post("/pdf-versions/{version_id}/validate")
+async def validate_pdf_version(version_id: int, db: Session = Depends(get_db)):
+    """Run validation checks against the parsed data for a PDF version.
+    Checks record counts against expected minimums for each parser."""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    
+    # Expected minimum record counts per parser
+    EXPECTED_MINIMUMS = {
+        "local_multipliers": 800,
+        "current_cost": 200,
+        "story_height_s11": 10,
+        "story_height_s13": 10,
+        "story_height_s14": 10,
+        "story_height_s15": 10,
+        "floor_area_perimeter_s11": 100,
+        "floor_area_perimeter_s13": 200,
+        "floor_area_perimeter_s14": 200,
+        "floor_area_perimeter_s15": 50,
+        "base_cost_tables_s11": 30,
+        "base_cost_tables_s13": 25,
+        "base_cost_tables_s14": 35,
+        "base_cost_tables_s15": 25,
+        "sprinklers": 50,
+        "hvac": 40,
+        "elevators": 3,
+    }
+    
+    runs = db.query(ParseRun).filter(ParseRun.pdf_version_id == version_id).all()
+    run_map = {r.parser_name: r for r in runs}
+    
+    checks = []
+    all_passed = True
+    for p in KNOWN_PARSERS:
+        run = run_map.get(p["name"])
+        expected = EXPECTED_MINIMUMS.get(p["name"], 1)
+        
+        if not run:
+            checks.append({"parser": p["name"], "label": p["label"], "passed": False, "reason": "Parser has not been run", "expected": expected, "actual": 0})
+            all_passed = False
+        elif run.status == "failed":
+            checks.append({"parser": p["name"], "label": p["label"], "passed": False, "reason": f"Parser failed: {run.error_message}", "expected": expected, "actual": 0})
+            all_passed = False
+        elif run.status == "running":
+            checks.append({"parser": p["name"], "label": p["label"], "passed": False, "reason": "Parser is still running", "expected": expected, "actual": run.records_created})
+            all_passed = False
+        elif run.records_created < expected:
+            checks.append({"parser": p["name"], "label": p["label"], "passed": False, "reason": f"Record count {run.records_created} below expected minimum {expected}", "expected": expected, "actual": run.records_created})
+            all_passed = False
+        else:
+            checks.append({"parser": p["name"], "label": p["label"], "passed": True, "reason": "OK", "expected": expected, "actual": run.records_created})
+    
+    return {"version_id": version_id, "all_passed": all_passed, "checks": checks}
+
+
+@app.delete("/pdf-versions/{version_id}")
+async def delete_pdf_version(version_id: int, db: Session = Depends(get_db)):
+    """Delete a PDF version (cannot delete active version)"""
+    version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="PDF version not found")
+    if version.is_active:
+        raise HTTPException(status_code=400, detail="Cannot delete the active version")
+    
+    # Delete associated parse runs
+    db.query(ParseRun).filter(ParseRun.pdf_version_id == version_id).delete()
+    
+    # Delete PDF file if it exists
+    if version.storage_path and os.path.exists(version.storage_path):
+        try:
+            os.remove(version.storage_path)
+        except OSError:
+            pass
+    
+    db.delete(version)
+    db.commit()
+    return {"success": True, "deleted_version_id": version_id}
+
+
+# ============ STATIC FRONTEND ============
+# Serve the built frontend if it exists
+frontend_dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+if os.path.isdir(frontend_dist):
+    from fastapi.responses import FileResponse
+
+    # Serve static assets
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="static-assets")
+
+    @app.get("/admin/{full_path:path}")
+    async def serve_frontend(full_path: str = ""):
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
+
+    @app.get("/admin")
+    async def serve_frontend_root():
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
 
 
 if __name__ == "__main__":
