@@ -18,21 +18,23 @@ from app.parsers.local_multipliers_original import (
 )
 
 
-def parse_and_save(pdf_path: str, db: Session, start_page: int = 719, end_page: int = 724) -> int:
+def parse_and_save(pdf_path: str, db: Session, start_page: int = 719, end_page: int = 724, pdf_version_id: int = None) -> int:
     """
-    Parse local multipliers from PDF using original parser and save to database
+    Parse local multipliers from PDF using original parser and save to database.
+    Version-isolated: only touches rows with the given pdf_version_id.
     
     Args:
         pdf_path: Path to MVS PDF file
         db: SQLAlchemy database session
         start_page: Starting page (1-indexed), default 719
         end_page: Ending page (1-indexed), default 724
+        pdf_version_id: PDF version ID to scope all writes to
     
     Returns:
         Number of records updated
     """
     print(f"[LocalMultipliers] Parsing from: {pdf_path}")
-    print(f"[LocalMultipliers] Pages {start_page} to {end_page}")
+    print(f"[LocalMultipliers] Pages {start_page} to {end_page}, version_id={pdf_version_id}")
     
     # Use the original parser
     results = parse_local_multiplier_table(pdf_path, start_page, end_page)
@@ -43,10 +45,10 @@ def parse_and_save(pdf_path: str, db: Session, start_page: int = 719, end_page: 
     multipliers = results['multipliers']
     print(f"[LocalMultipliers] Parsed {len(multipliers)} entries")
     
-    # Clear existing data
-    db.query(LocalMultiplier).delete()
-    db.commit()
-    print("[LocalMultipliers] Cleared existing records")
+    # Version-isolated: only delete rows for THIS version, then insert in one transaction
+    if pdf_version_id:
+        deleted = db.query(LocalMultiplier).filter(LocalMultiplier.pdf_version_id == pdf_version_id).delete()
+        print(f"[LocalMultipliers] Cleared {deleted} existing records for version {pdf_version_id}")
     
     # Save to database
     for m in multipliers:
@@ -61,11 +63,12 @@ def parse_and_save(pdf_path: str, db: Session, start_page: int = 719, end_page: 
             class_d=m['class_d'],
             class_s=m['class_s'],
             source_page=m['source_page'],
-            is_regional=m.get('is_regional', False)
+            is_regional=m.get('is_regional', False),
+            pdf_version_id=pdf_version_id,
         )
         db.add(record)
     
     db.commit()
-    print(f"[LocalMultipliers] Saved {len(multipliers)} records to database")
+    print(f"[LocalMultipliers] Saved {len(multipliers)} records for version {pdf_version_id}")
     
     return len(multipliers)

@@ -47,20 +47,22 @@ STATE_REGION_MAPPING = {
 }
 
 
-def parse_and_save(pdf_path: str, db: Session, page: int = 717) -> int:
+def parse_and_save(pdf_path: str, db: Session, page: int = 717, pdf_version_id: int = None) -> int:
     """
-    Parse current cost multipliers from PDF using original parser and save to database
+    Parse current cost multipliers from PDF using original parser and save to database.
+    Version-isolated: only touches rows with the given pdf_version_id.
     
     Args:
         pdf_path: Path to MVS PDF file
         db: SQLAlchemy database session
         page: Page number (1-indexed), default 717
+        pdf_version_id: PDF version ID to scope all writes to
     
     Returns:
         Number of records updated
     """
     print(f"[CurrentCost] Parsing from: {pdf_path}")
-    print(f"[CurrentCost] Page {page}")
+    print(f"[CurrentCost] Page {page}, version_id={pdf_version_id}")
     
     # Use the original parser
     results = parse_current_cost_multiplier_table(pdf_path, page, page)
@@ -71,14 +73,15 @@ def parse_and_save(pdf_path: str, db: Session, page: int = 717) -> int:
     multipliers = results['multipliers']
     print(f"[CurrentCost] Parsed {len(multipliers)} entries")
     
-    # Clear existing data
-    db.query(CurrentCostMultiplier).delete()
-    db.query(RegionMapping).delete()
-    db.commit()
-    print("[CurrentCost] Cleared existing records")
+    # Version-isolated: only delete rows for THIS version
+    if pdf_version_id:
+        deleted = db.query(CurrentCostMultiplier).filter(CurrentCostMultiplier.pdf_version_id == pdf_version_id).delete()
+        print(f"[CurrentCost] Cleared {deleted} existing records for version {pdf_version_id}")
     
-    # First, save region mappings
-    save_region_mappings(db)
+    # Region mappings are static/global - only save if they don't exist yet
+    existing_mappings = db.query(RegionMapping).count()
+    if existing_mappings == 0:
+        save_region_mappings(db)
     
     # Save multipliers to database
     for m in multipliers:
@@ -88,12 +91,13 @@ def parse_and_save(pdf_path: str, db: Session, page: int = 717) -> int:
             building_class=m['building_class'],
             effective_date=m['effective_date'],
             multiplier=m['multiplier'],
-            source_page=m['source_page']
+            source_page=m['source_page'],
+            pdf_version_id=pdf_version_id,
         )
         db.add(record)
     
     db.commit()
-    print(f"[CurrentCost] Saved {len(multipliers)} records to database")
+    print(f"[CurrentCost] Saved {len(multipliers)} records for version {pdf_version_id}")
     
     return len(multipliers)
 

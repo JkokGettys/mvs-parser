@@ -61,6 +61,7 @@ class ParseRun(Base):
     status = Column(String(20), nullable=False, default='pending')  # pending, running, success, failed
     records_created = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+    diff_summary = Column(Text, nullable=True)  # JSON string: diff vs active version
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())

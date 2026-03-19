@@ -48,13 +48,13 @@ def parse_and_save(pdf_path: str, db: Session, page: int = 90, section: int = 11
     multipliers = results['multipliers']
     print(f"[StoryHeight] Parsed {len(multipliers)} entries for section {section}")
     
-    # Clear existing data for this section only
-    query = db.query(StoryHeightMultiplier).filter(StoryHeightMultiplier.section == section)
+    # Version-isolated: only delete rows for THIS version + section
     if pdf_version_id:
-        query = query.filter(StoryHeightMultiplier.pdf_version_id == pdf_version_id)
-    deleted = query.delete()
-    db.commit()
-    print(f"[StoryHeight] Cleared {deleted} existing records for section {section}")
+        deleted = db.query(StoryHeightMultiplier).filter(
+            StoryHeightMultiplier.section == section,
+            StoryHeightMultiplier.pdf_version_id == pdf_version_id
+        ).delete()
+        print(f"[StoryHeight] Cleared {deleted} existing records for section {section}, version {pdf_version_id}")
     
     # Save to database
     for m in multipliers:

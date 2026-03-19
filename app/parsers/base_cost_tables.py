@@ -199,35 +199,39 @@ def parse_directory(directory_path: str) -> List[Dict]:
     return tables
 
 
-def save_tables_to_db(tables: List[Dict], db: Session, section: int = None, clear_section: bool = False) -> int:
+def save_tables_to_db(tables: List[Dict], db: Session, section: int = None, pdf_version_id: int = None) -> int:
     """
-    Save parsed tables to database
+    Save parsed tables to database. Version-isolated.
     
     Args:
         tables: List of parsed table dicts
         db: Database session
         section: Section number for the tables
-        clear_section: If True, delete all existing tables for the section before inserting
+        pdf_version_id: PDF version ID to scope all writes to
     
     Returns:
         Number of tables saved
     """
-    # Only clear if explicitly requested
-    if clear_section and section is not None:
-        existing = db.query(BaseCostTable).filter(BaseCostTable.section == section).all()
+    # Version-isolated: only delete tables for THIS version + section
+    if pdf_version_id and section is not None:
+        existing = db.query(BaseCostTable).filter(
+            BaseCostTable.section == section,
+            BaseCostTable.pdf_version_id == pdf_version_id
+        ).all()
         for table in existing:
             db.delete(table)
-        db.commit()
-        print(f"[BaseCostTables] Cleared existing tables for Section {section}")
-    
-    # Delete tables with same file_name to avoid duplicates
-    for table_data in tables:
-        file_name = table_data.get('file_name')
-        if file_name:
-            existing = db.query(BaseCostTable).filter(BaseCostTable.file_name == file_name).first()
-            if existing:
-                db.delete(existing)
-                db.commit()
+        print(f"[BaseCostTables] Cleared {len(existing)} existing tables for Section {section}, version {pdf_version_id}")
+    elif pdf_version_id:
+        # Delete by version + file_name match to avoid duplicates within this version
+        for table_data in tables:
+            file_name = table_data.get('file_name')
+            if file_name:
+                existing = db.query(BaseCostTable).filter(
+                    BaseCostTable.file_name == file_name,
+                    BaseCostTable.pdf_version_id == pdf_version_id
+                ).first()
+                if existing:
+                    db.delete(existing)
     
     saved_count = 0
     
@@ -240,7 +244,8 @@ def save_tables_to_db(tables: List[Dict], db: Session, section: int = None, clea
             page=table_data['page'],
             pdf_page=table_data.get('pdf_page'),
             notes=table_data.get('notes'),
-            file_name=table_data.get('file_name')
+            file_name=table_data.get('file_name'),
+            pdf_version_id=pdf_version_id,
         )
         db.add(table)
         db.flush()  # Get the table ID
@@ -265,12 +270,12 @@ def save_tables_to_db(tables: List[Dict], db: Session, section: int = None, clea
         saved_count += 1
     
     db.commit()
-    print(f"[BaseCostTables] Saved {saved_count} tables to database")
+    print(f"[BaseCostTables] Saved {saved_count} tables for version {pdf_version_id}")
     
     return saved_count
 
 
-def import_from_directory(directory_path: str, db: Session, section: int = None) -> Dict:
+def import_from_directory(directory_path: str, db: Session, section: int = None, pdf_version_id: int = None) -> Dict:
     """
     Import all markdown files from a directory
     
@@ -299,7 +304,7 @@ def import_from_directory(directory_path: str, db: Session, section: int = None)
         for table in tables:
             table['section'] = section
     
-    saved = save_tables_to_db(tables, db, section, clear_section=False)
+    saved = save_tables_to_db(tables, db, section, pdf_version_id=pdf_version_id)
     total_rows = sum(len(t['rows']) for t in tables)
     
     return {

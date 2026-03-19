@@ -49,13 +49,13 @@ def parse_and_save(pdf_path: str, db: Session, page: int = 90, section: int = 11
     multipliers = results['multipliers']
     print(f"[FloorAreaPerimeter] Parsed {len(multipliers)} entries for section {section}")
     
-    # Clear existing data for this section only
-    query = db.query(FloorAreaPerimeterMultiplier).filter(FloorAreaPerimeterMultiplier.section == section)
+    # Version-isolated: only delete rows for THIS version + section
     if pdf_version_id:
-        query = query.filter(FloorAreaPerimeterMultiplier.pdf_version_id == pdf_version_id)
-    deleted = query.delete()
-    db.commit()
-    print(f"[FloorAreaPerimeter] Cleared {deleted} existing records for section {section}")
+        deleted = db.query(FloorAreaPerimeterMultiplier).filter(
+            FloorAreaPerimeterMultiplier.section == section,
+            FloorAreaPerimeterMultiplier.pdf_version_id == pdf_version_id
+        ).delete()
+        print(f"[FloorAreaPerimeter] Cleared {deleted} existing records for section {section}, version {pdf_version_id}")
     
     # Save to database
     for m in multipliers:
@@ -85,13 +85,13 @@ def parse_and_save_section(pdf_path: str, db: Session, section: int, pdf_version
     """
     pages = SECTION_FAP_PAGES.get(section, [90])
     
-    # Clear existing data for this section once before inserting
-    query = db.query(FloorAreaPerimeterMultiplier).filter(FloorAreaPerimeterMultiplier.section == section)
+    # Version-isolated: only delete rows for THIS version + section
     if pdf_version_id:
-        query = query.filter(FloorAreaPerimeterMultiplier.pdf_version_id == pdf_version_id)
-    deleted = query.delete()
-    db.commit()
-    print(f"[FloorAreaPerimeter] Cleared {deleted} existing records for section {section}")
+        deleted = db.query(FloorAreaPerimeterMultiplier).filter(
+            FloorAreaPerimeterMultiplier.section == section,
+            FloorAreaPerimeterMultiplier.pdf_version_id == pdf_version_id
+        ).delete()
+        print(f"[FloorAreaPerimeter] Cleared {deleted} existing records for section {section}, version {pdf_version_id}")
     
     total = 0
     for page in pages:

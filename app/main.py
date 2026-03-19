@@ -12,6 +12,7 @@ import os
 from app.database import get_db, init_db, BaseCostTable, BaseCostRow, LocalMultiplier, CurrentCostMultiplier, StoryHeightMultiplier, FloorAreaPerimeterMultiplier, SprinklerCost, HvacCost, ElevatorType, ElevatorCost, ElevatorCostPerStop, PdfVersion, ParseRun
 from app.parsers import local_multipliers, current_cost, story_height, floor_area_perimeter
 from app.parsers import base_cost_tables
+from app.parsers.diff import generate_diff
 
 app = FastAPI(
     title="MVS Parser Service",
@@ -53,23 +54,23 @@ async def startup():
 # ============ KNOWN PARSERS REGISTRY ============
 # Defines ALL parsers that should run for a complete parse
 KNOWN_PARSERS = [
-    {"name": "local_multipliers", "label": "Local Multipliers", "description": "Location-based cost adjustment multipliers (865+ entries)", "section": None},
-    {"name": "current_cost", "label": "Current Cost Multipliers", "description": "Time-based cost adjustment multipliers by region/class/date", "section": None},
-    {"name": "story_height_s11", "label": "Story Height - S11", "description": "Height multipliers for Apartments & Hotels (Section 11)", "section": 11},
-    {"name": "story_height_s13", "label": "Story Height - S13", "description": "Height multipliers for Stores & Commercial (Section 13)", "section": 13},
-    {"name": "story_height_s14", "label": "Story Height - S14", "description": "Height multipliers for Garages & Industrial (Section 14)", "section": 14},
-    {"name": "story_height_s15", "label": "Story Height - S15", "description": "Height multipliers for Offices & Medical (Section 15)", "section": 15},
-    {"name": "floor_area_perimeter_s11", "label": "Floor Area/Perimeter - S11", "description": "Size/shape multipliers for Apartments & Hotels", "section": 11},
-    {"name": "floor_area_perimeter_s13", "label": "Floor Area/Perimeter - S13", "description": "Size/shape multipliers for Stores & Commercial", "section": 13},
-    {"name": "floor_area_perimeter_s14", "label": "Floor Area/Perimeter - S14", "description": "Size/shape multipliers for Garages & Industrial", "section": 14},
-    {"name": "floor_area_perimeter_s15", "label": "Floor Area/Perimeter - S15", "description": "Size/shape multipliers for Offices & Medical", "section": 15},
-    {"name": "base_cost_tables_s11", "label": "Base Cost Tables - S11", "description": "Base cost tables for Section 11 building types", "section": 11},
-    {"name": "base_cost_tables_s13", "label": "Base Cost Tables - S13", "description": "Base cost tables for Section 13 building types", "section": 13},
-    {"name": "base_cost_tables_s14", "label": "Base Cost Tables - S14", "description": "Base cost tables for Section 14 building types", "section": 14},
-    {"name": "base_cost_tables_s15", "label": "Base Cost Tables - S15", "description": "Base cost tables for Section 15 building types", "section": 15},
-    {"name": "sprinklers", "label": "Sprinkler Costs", "description": "Sprinkler system cost refinements (all sections)", "section": None},
-    {"name": "hvac", "label": "HVAC Costs", "description": "HVAC/climate adjustment costs (all sections)", "section": None},
-    {"name": "elevators", "label": "Elevator Costs", "description": "Elevator cost data from Section 58", "section": None},
+    {"name": "local_multipliers", "label": "Local Multipliers", "description": "Location-based cost adjustment multipliers (865+ entries)", "section": None, "page_type": "range", "default_start_page": 719, "default_end_page": 724},
+    {"name": "current_cost", "label": "Current Cost Multipliers", "description": "Time-based cost adjustment multipliers by region/class/date", "section": None, "page_type": "single", "default_start_page": 717, "default_end_page": None},
+    {"name": "story_height_s11", "label": "Story Height - S11", "description": "Height multipliers for Apartments & Hotels (Section 11)", "section": 11, "page_type": "single", "default_start_page": 90, "default_end_page": None},
+    {"name": "story_height_s13", "label": "Story Height - S13", "description": "Height multipliers for Stores & Commercial (Section 13)", "section": 13, "page_type": "single", "default_start_page": 218, "default_end_page": None},
+    {"name": "story_height_s14", "label": "Story Height - S14", "description": "Height multipliers for Garages & Industrial (Section 14)", "section": 14, "page_type": "single", "default_start_page": 215, "default_end_page": None},
+    {"name": "story_height_s15", "label": "Story Height - S15", "description": "Height multipliers for Offices & Medical (Section 15)", "section": 15, "page_type": "single", "default_start_page": None, "default_end_page": None},
+    {"name": "floor_area_perimeter_s11", "label": "Floor Area/Perimeter - S11", "description": "Size/shape multipliers for Apartments & Hotels", "section": 11, "page_type": "csv", "default_start_page": 90, "default_end_page": None},
+    {"name": "floor_area_perimeter_s13", "label": "Floor Area/Perimeter - S13", "description": "Size/shape multipliers for Stores & Commercial", "section": 13, "page_type": "csv", "default_start_page": 217, "default_end_page": None},
+    {"name": "floor_area_perimeter_s14", "label": "Floor Area/Perimeter - S14", "description": "Size/shape multipliers for Garages & Industrial", "section": 14, "page_type": "csv", "default_start_page": 214, "default_end_page": 215},
+    {"name": "floor_area_perimeter_s15", "label": "Floor Area/Perimeter - S15", "description": "Size/shape multipliers for Offices & Medical", "section": 15, "page_type": "csv", "default_start_page": None, "default_end_page": None},
+    {"name": "base_cost_tables_s11", "label": "Base Cost Tables - S11", "description": "Base cost tables for Section 11 building types", "section": 11, "page_type": None, "default_start_page": None, "default_end_page": None},
+    {"name": "base_cost_tables_s13", "label": "Base Cost Tables - S13", "description": "Base cost tables for Section 13 building types", "section": 13, "page_type": None, "default_start_page": None, "default_end_page": None},
+    {"name": "base_cost_tables_s14", "label": "Base Cost Tables - S14", "description": "Base cost tables for Section 14 building types", "section": 14, "page_type": None, "default_start_page": None, "default_end_page": None},
+    {"name": "base_cost_tables_s15", "label": "Base Cost Tables - S15", "description": "Base cost tables for Section 15 building types", "section": 15, "page_type": None, "default_start_page": None, "default_end_page": None},
+    {"name": "sprinklers", "label": "Sprinkler Costs", "description": "Sprinkler system cost refinements (all sections)", "section": None, "page_type": None, "default_start_page": None, "default_end_page": None},
+    {"name": "hvac", "label": "HVAC Costs", "description": "HVAC/climate adjustment costs (all sections)", "section": None, "page_type": None, "default_start_page": None, "default_end_page": None},
+    {"name": "elevators", "label": "Elevator Costs", "description": "Elevator cost data from Section 58", "section": None, "page_type": None, "default_start_page": None, "default_end_page": None},
 ]
 
 
@@ -98,10 +99,11 @@ def start_parse_run(db: Session, version_id: int, parser_name: str) -> ParseRun:
     return run
 
 
-def complete_parse_run(db: Session, run: ParseRun, records: int):
-    """Mark a parse run as successful"""
+def complete_parse_run(db: Session, run: ParseRun, records: int, diff_json: str = None):
+    """Mark a parse run as successful, optionally storing diff summary"""
     run.status = 'success'
     run.records_created = records
+    run.diff_summary = diff_json
     run.completed_at = datetime.utcnow()
     db.commit()
 
@@ -185,14 +187,46 @@ async def upload_pdf_version(
 
 
 @app.patch("/pdf-versions/{version_id}/activate")
-async def activate_pdf_version(version_id: int, db: Session = Depends(get_db)):
-    """Set a version as the active version (deactivates all others)"""
+async def activate_pdf_version(version_id: int, force: bool = False, db: Session = Depends(get_db)):
+    """Set a version as the active version (deactivates all others).
+    Validates ALL known parsers have status='success' before allowing activation.
+    Pass force=true to skip validation (not recommended for production)."""
     version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
     if not version:
         raise HTTPException(status_code=404, detail="PDF version not found")
 
+    # Gate: validate all parsers succeeded unless force=true
+    if not force:
+        runs = db.query(ParseRun).filter(ParseRun.pdf_version_id == version_id).all()
+        run_map = {r.parser_name: r for r in runs}
+
+        missing = []
+        failed = []
+        for p in KNOWN_PARSERS:
+            run = run_map.get(p["name"])
+            if not run or run.status == "not_started":
+                missing.append(p["name"])
+            elif run.status == "failed":
+                failed.append(p["name"])
+            elif run.status == "running":
+                failed.append(f"{p['name']} (still running)")
+            elif run.status != "success":
+                failed.append(f"{p['name']} (status: {run.status})")
+
+        if missing or failed:
+            detail_parts = []
+            if missing:
+                detail_parts.append(f"Not run: {', '.join(missing)}")
+            if failed:
+                detail_parts.append(f"Failed/incomplete: {', '.join(failed)}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"Cannot activate: {'; '.join(detail_parts)}. Run all parsers successfully first, or use force=true to override."
+            )
+
     db.query(PdfVersion).update({"is_active": False})
     version.is_active = True
+    version.is_fully_parsed = True
     db.commit()
     return {"success": True, "active_version_id": version_id}
 
@@ -210,7 +244,7 @@ async def mark_pdf_version_parsed(version_id: int, db: Session = Depends(get_db)
 
 
 @app.post("/parse-version/{version_id}/local-multipliers")
-async def parse_version_local_multipliers(version_id: int, db: Session = Depends(get_db)):
+async def parse_version_local_multipliers(version_id: int, start_page: int = None, end_page: int = None, db: Session = Depends(get_db)):
     """Parse local multipliers from a stored PDF version"""
     version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
     if not version:
@@ -220,8 +254,14 @@ async def parse_version_local_multipliers(version_id: int, db: Session = Depends
 
     run = start_parse_run(db, version_id, "local_multipliers")
     try:
-        result = local_multipliers.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
-        complete_parse_run(db, run, result)
+        kwargs = {"pdf_version_id": version_id}
+        if start_page is not None:
+            kwargs["start_page"] = start_page
+        if end_page is not None:
+            kwargs["end_page"] = end_page
+        result = local_multipliers.parse_and_save(version.storage_path, db, **kwargs)
+        diff_json = generate_diff(db, version_id, "local_multipliers")
+        complete_parse_run(db, run, result, diff_json=diff_json)
         return {"success": True, "records_updated": result, "pdf_version_id": version_id}
     except Exception as e:
         fail_parse_run(db, run, str(e))
@@ -229,7 +269,7 @@ async def parse_version_local_multipliers(version_id: int, db: Session = Depends
 
 
 @app.post("/parse-version/{version_id}/current-cost")
-async def parse_version_current_cost(version_id: int, db: Session = Depends(get_db)):
+async def parse_version_current_cost(version_id: int, page: int = None, db: Session = Depends(get_db)):
     """Parse current cost multipliers from a stored PDF version"""
     version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
     if not version:
@@ -239,8 +279,12 @@ async def parse_version_current_cost(version_id: int, db: Session = Depends(get_
 
     run = start_parse_run(db, version_id, "current_cost")
     try:
-        result = current_cost.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
-        complete_parse_run(db, run, result)
+        kwargs = {"pdf_version_id": version_id}
+        if page is not None:
+            kwargs["page"] = page
+        result = current_cost.parse_and_save(version.storage_path, db, **kwargs)
+        diff_json = generate_diff(db, version_id, "current_cost")
+        complete_parse_run(db, run, result, diff_json=diff_json)
         return {"success": True, "records_updated": result, "pdf_version_id": version_id}
     except Exception as e:
         fail_parse_run(db, run, str(e))
@@ -248,7 +292,7 @@ async def parse_version_current_cost(version_id: int, db: Session = Depends(get_
 
 
 @app.post("/parse-version/{version_id}/story-height")
-async def parse_version_story_height(version_id: int, section: int = 11, db: Session = Depends(get_db)):
+async def parse_version_story_height(version_id: int, section: int = 11, start_page: int = None, db: Session = Depends(get_db)):
     """Parse story height multipliers from a stored PDF version for a specific section"""
     version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
     if not version:
@@ -256,11 +300,13 @@ async def parse_version_story_height(version_id: int, section: int = 11, db: Ses
     if not os.path.exists(version.storage_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
-    run = start_parse_run(db, version_id, f"story_height_s{section}")
+    parser_name = f"story_height_s{section}"
+    run = start_parse_run(db, version_id, parser_name)
     try:
-        page = story_height.SECTION_STORY_HEIGHT_PAGES.get(section, 90)
+        page = start_page if start_page is not None else story_height.SECTION_STORY_HEIGHT_PAGES.get(section, 90)
         result = story_height.parse_and_save(version.storage_path, db, page=page, section=section, pdf_version_id=version_id)
-        complete_parse_run(db, run, result)
+        diff_json = generate_diff(db, version_id, parser_name)
+        complete_parse_run(db, run, result, diff_json=diff_json)
         return {"success": True, "records_updated": result, "section": section, "pdf_version_id": version_id}
     except Exception as e:
         fail_parse_run(db, run, str(e))
@@ -278,11 +324,13 @@ async def parse_version_story_height_all(version_id: int, db: Session = Depends(
 
     section_results = {}
     for section in story_height.SECTION_STORY_HEIGHT_PAGES.keys():
-        run = start_parse_run(db, version_id, f"story_height_s{section}")
+        parser_name = f"story_height_s{section}"
+        run = start_parse_run(db, version_id, parser_name)
         try:
             page = story_height.SECTION_STORY_HEIGHT_PAGES[section]
             result = story_height.parse_and_save(version.storage_path, db, page=page, section=section, pdf_version_id=version_id)
-            complete_parse_run(db, run, result)
+            diff_json = generate_diff(db, version_id, parser_name)
+            complete_parse_run(db, run, result, diff_json=diff_json)
             section_results[section] = result
         except Exception as e:
             fail_parse_run(db, run, str(e))
@@ -292,18 +340,27 @@ async def parse_version_story_height_all(version_id: int, db: Session = Depends(
 
 
 @app.post("/parse-version/{version_id}/floor-area-perimeter")
-async def parse_version_floor_area_perimeter(version_id: int, section: int = 11, db: Session = Depends(get_db)):
-    """Parse floor area/perimeter multipliers from a stored PDF version for a specific section"""
+async def parse_version_floor_area_perimeter(version_id: int, section: int = 11, pages: str = None, db: Session = Depends(get_db)):
+    """Parse floor area/perimeter multipliers from a stored PDF version for a specific section.
+    pages: optional comma-separated page numbers to override defaults (e.g. '214,215')"""
     version = db.query(PdfVersion).filter(PdfVersion.id == version_id).first()
     if not version:
         raise HTTPException(status_code=404, detail="PDF version not found")
     if not os.path.exists(version.storage_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found at {version.storage_path}")
 
-    run = start_parse_run(db, version_id, f"floor_area_perimeter_s{section}")
+    # Override SECTION_FAP_PAGES if custom pages provided
+    if pages:
+        custom_pages = [int(p.strip()) for p in pages.split(',') if p.strip().isdigit()]
+        if custom_pages:
+            floor_area_perimeter.SECTION_FAP_PAGES[section] = custom_pages
+
+    parser_name = f"floor_area_perimeter_s{section}"
+    run = start_parse_run(db, version_id, parser_name)
     try:
         result = floor_area_perimeter.parse_and_save_section(version.storage_path, db, section=section, pdf_version_id=version_id)
-        complete_parse_run(db, run, result)
+        diff_json = generate_diff(db, version_id, parser_name)
+        complete_parse_run(db, run, result, diff_json=diff_json)
         return {"success": True, "records_updated": result, "section": section, "pdf_version_id": version_id}
     except Exception as e:
         fail_parse_run(db, run, str(e))
@@ -321,10 +378,12 @@ async def parse_version_floor_area_perimeter_all(version_id: int, db: Session = 
 
     section_results = {}
     for section in floor_area_perimeter.SECTION_FAP_PAGES.keys():
-        run = start_parse_run(db, version_id, f"floor_area_perimeter_s{section}")
+        parser_name = f"floor_area_perimeter_s{section}"
+        run = start_parse_run(db, version_id, parser_name)
         try:
             result = floor_area_perimeter.parse_and_save_section(version.storage_path, db, section=section, pdf_version_id=version_id)
-            complete_parse_run(db, run, result)
+            diff_json = generate_diff(db, version_id, parser_name)
+            complete_parse_run(db, run, result, diff_json=diff_json)
             section_results[section] = result
         except Exception as e:
             fail_parse_run(db, run, str(e))
@@ -353,7 +412,8 @@ async def parse_version_all(version_id: int, db: Session = Depends(get_db)):
         run = start_parse_run(db, version_id, name)
         try:
             count = parser.parse_and_save(version.storage_path, db, pdf_version_id=version_id)
-            complete_parse_run(db, run, count)
+            diff_json = generate_diff(db, version_id, name)
+            complete_parse_run(db, run, count, diff_json=diff_json)
             results[name] = count
         except Exception as e:
             fail_parse_run(db, run, str(e))
@@ -366,7 +426,8 @@ async def parse_version_all(version_id: int, db: Session = Depends(get_db)):
         try:
             page = story_height.SECTION_STORY_HEIGHT_PAGES[section]
             count = story_height.parse_and_save(version.storage_path, db, page=page, section=section, pdf_version_id=version_id)
-            complete_parse_run(db, run, count)
+            diff_json = generate_diff(db, version_id, parser_name)
+            complete_parse_run(db, run, count, diff_json=diff_json)
             results[parser_name] = count
         except Exception as e:
             fail_parse_run(db, run, str(e))
@@ -378,7 +439,8 @@ async def parse_version_all(version_id: int, db: Session = Depends(get_db)):
         run = start_parse_run(db, version_id, parser_name)
         try:
             count = floor_area_perimeter.parse_and_save_section(version.storage_path, db, section=section, pdf_version_id=version_id)
-            complete_parse_run(db, run, count)
+            diff_json = generate_diff(db, version_id, parser_name)
+            complete_parse_run(db, run, count, diff_json=diff_json)
             results[parser_name] = count
         except Exception as e:
             fail_parse_run(db, run, str(e))
@@ -1311,17 +1373,31 @@ async def list_parse_runs(version_id: int, db: Session = Depends(get_db)):
     runs = db.query(ParseRun).filter(ParseRun.pdf_version_id == version_id).all()
     run_map = {r.parser_name: r for r in runs}
     
+    import json as json_lib
+
     result = []
     for p in KNOWN_PARSERS:
         run = run_map.get(p["name"])
+        # Parse diff_summary JSON string back to object for the response
+        diff_data = None
+        if run and run.diff_summary:
+            try:
+                diff_data = json_lib.loads(run.diff_summary)
+            except (json_lib.JSONDecodeError, TypeError):
+                diff_data = None
+
         result.append({
             "parser_name": p["name"],
             "label": p["label"],
             "description": p["description"],
             "section": p["section"],
+            "page_type": p.get("page_type"),
+            "default_start_page": p.get("default_start_page"),
+            "default_end_page": p.get("default_end_page"),
             "status": run.status if run else "not_started",
             "records_created": run.records_created if run else 0,
             "error_message": run.error_message if run else None,
+            "diff_summary": diff_data,
             "started_at": run.started_at.isoformat() if run and run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run and run.completed_at else None,
         })
