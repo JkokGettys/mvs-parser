@@ -36,19 +36,32 @@ async def startup():
     init_db()
     print("[MVS Parser Service] Database initialized")
     
-    # Run migration to fix TEXT columns
+    # Run migrations
     try:
         from app.database import get_session_local
         from sqlalchemy import text
         SessionLocal = get_session_local()
         db = SessionLocal()
+        # Fix TEXT columns
         db.execute(text("ALTER TABLE mvs_base_cost_rows ALTER COLUMN building_class TYPE TEXT"))
         db.execute(text("ALTER TABLE mvs_base_cost_rows ALTER COLUMN quality_type TYPE TEXT"))
         db.commit()
-        db.close()
         print("[MVS Parser Service] TEXT columns migration completed")
     except Exception as e:
-        print(f"[MVS Parser Service] Migration skipped or failed: {e}")
+        print(f"[MVS Parser Service] TEXT migration skipped: {e}")
+
+    # Add diff_summary column to parse runs if missing
+    try:
+        from app.database import get_session_local
+        from sqlalchemy import text
+        SessionLocal = get_session_local()
+        db = SessionLocal()
+        db.execute(text("ALTER TABLE mvs_parse_runs ADD COLUMN IF NOT EXISTS diff_summary TEXT"))
+        db.commit()
+        db.close()
+        print("[MVS Parser Service] diff_summary migration completed")
+    except Exception as e:
+        print(f"[MVS Parser Service] diff_summary migration skipped: {e}")
 
 
 # ============ KNOWN PARSERS REGISTRY ============
