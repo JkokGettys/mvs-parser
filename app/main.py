@@ -1415,15 +1415,17 @@ frontend_dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fronte
 if os.path.isdir(frontend_dist):
     from fastapi.responses import FileResponse
 
-    # Serve static assets
-    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="static-assets")
-
-    @app.get("/admin/{full_path:path}")
-    async def serve_frontend(full_path: str = ""):
-        return FileResponse(os.path.join(frontend_dist, "index.html"))
+    # Serve static assets at /admin/assets/ to match Vite base: '/admin/'
+    assets_dir = os.path.join(frontend_dist, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/admin/assets", StaticFiles(directory=assets_dir), name="static-assets")
 
     @app.get("/admin")
     async def serve_frontend_root():
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
+
+    @app.get("/admin/{full_path:path}")
+    async def serve_frontend(full_path: str = ""):
         return FileResponse(os.path.join(frontend_dist, "index.html"))
 
 
