@@ -14,6 +14,7 @@ import {
   Stack,
   Collapse,
   IconButton,
+  TextField,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import StarIcon from '@mui/icons-material/Star'
@@ -29,10 +30,17 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
+import TrendingUpIcon from '@mui/icons-material/TrendingUp'
+import TrendingDownIcon from '@mui/icons-material/TrendingDown'
+import NewReleasesIcon from '@mui/icons-material/NewReleases'
 import {
   PdfVersion,
   ParseRunInfo,
+  DiffSummary,
+  DiffChange,
   ValidationCheck,
+  RunParserPageOpts,
   fetchVersion,
   fetchParseRuns,
   runParser,
@@ -89,6 +97,121 @@ function statusColor(status: string): 'success' | 'error' | 'warning' | 'info' |
   }
 }
 
+function DiffPanel({ diff }: { diff: DiffSummary }) {
+  if (diff.is_first_version) {
+    return (
+      <Box sx={{ px: 3, pb: 2, pt: 0.5 }}>
+        <Alert severity="info" variant="outlined" sx={{ py: 0.5 }} icon={<NewReleasesIcon fontSize="small" />}>
+          First version -- {diff.new_count.toLocaleString()} records created (no previous version to compare)
+        </Alert>
+      </Box>
+    )
+  }
+
+  const hasChanges = diff.sample_changes.length > 0
+  const countChanged = diff.count_delta !== 0
+  const rowCountChanged = diff.row_count_delta !== undefined && diff.row_count_delta !== 0
+
+  return (
+    <Box sx={{ px: 3, pb: 2, pt: 0.5 }}>
+      <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+        {/* Count summary bar */}
+        <Box sx={{ px: 2, py: 1, bgcolor: 'grey.50', display: 'flex', gap: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Stack direction="row" alignItems="center" spacing={0.5}>
+            <CompareArrowsIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+            <Typography variant="caption" color="text.secondary" fontWeight={600}>vs Active Version</Typography>
+          </Stack>
+          <Typography variant="caption">
+            Records: <strong>{diff.old_count.toLocaleString()}</strong> {'-->'} <strong>{diff.new_count.toLocaleString()}</strong>
+            {countChanged && (
+              <Chip
+                label={`${diff.count_delta > 0 ? '+' : ''}${diff.count_delta}`}
+                size="small"
+                color={diff.count_delta > 0 ? 'info' : 'warning'}
+                variant="outlined"
+                sx={{ ml: 0.5, height: 18, fontSize: 10 }}
+              />
+            )}
+          </Typography>
+          {diff.old_row_count !== undefined && (
+            <Typography variant="caption">
+              Rows: <strong>{diff.old_row_count?.toLocaleString()}</strong> {'-->'} <strong>{diff.new_row_count?.toLocaleString()}</strong>
+              {rowCountChanged && (
+                <Chip
+                  label={`${(diff.row_count_delta ?? 0) > 0 ? '+' : ''}${diff.row_count_delta}`}
+                  size="small"
+                  color={(diff.row_count_delta ?? 0) > 0 ? 'info' : 'warning'}
+                  variant="outlined"
+                  sx={{ ml: 0.5, height: 18, fontSize: 10 }}
+                />
+              )}
+            </Typography>
+          )}
+        </Box>
+
+        {/* Sample value changes */}
+        {hasChanges && (
+          <Box>
+            <Box sx={{ px: 2, py: 0.5, bgcolor: 'warning.50', borderTop: '1px solid', borderColor: 'divider' }}>
+              <Typography variant="caption" fontWeight={600} color="text.secondary">
+                Top value changes (by % magnitude)
+              </Typography>
+            </Box>
+            {diff.sample_changes.map((c, i) => {
+              const keyStr = Object.entries(c.key).map(([k, v]) => `${k}: ${v}`).join(', ')
+              const isLarge = c.pct_change !== null && Math.abs(c.pct_change) > 10
+              return (
+                <Box
+                  key={i}
+                  sx={{
+                    px: 2,
+                    py: 0.5,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1.5,
+                    borderTop: '1px solid',
+                    borderColor: 'divider',
+                    bgcolor: isLarge ? 'error.50' : 'transparent',
+                  }}
+                >
+                  {c.change > 0 ? (
+                    <TrendingUpIcon sx={{ fontSize: 14, color: isLarge ? 'error.main' : 'info.main' }} />
+                  ) : (
+                    <TrendingDownIcon sx={{ fontSize: 14, color: isLarge ? 'error.main' : 'info.main' }} />
+                  )}
+                  <Typography variant="caption" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <strong>{c.field}</strong> [{keyStr}]
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                    {c.old} {'-->'} {c.new}
+                  </Typography>
+                  {c.pct_change !== null && (
+                    <Chip
+                      label={`${c.pct_change > 0 ? '+' : ''}${c.pct_change}%`}
+                      size="small"
+                      color={isLarge ? 'error' : 'default'}
+                      variant={isLarge ? 'filled' : 'outlined'}
+                      sx={{ height: 18, fontSize: 10, minWidth: 55 }}
+                    />
+                  )}
+                </Box>
+              )
+            })}
+          </Box>
+        )}
+
+        {!hasChanges && !countChanged && (
+          <Box sx={{ px: 2, py: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+            <Typography variant="caption" color="success.main" fontWeight={600}>
+              No value changes detected -- data matches active version
+            </Typography>
+          </Box>
+        )}
+      </Box>
+    </Box>
+  )
+}
+
 // Group parsers by category for visual organization
 function groupParsers(runs: ParseRunInfo[]): { label: string; parsers: ParseRunInfo[] }[] {
   const groups: { label: string; filter: (p: ParseRunInfo) => boolean }[] = [
@@ -119,6 +242,8 @@ export default function VersionDetailPage() {
   const [runAllActive, setRunAllActive] = useState(false)
   const [validating, setValidating] = useState(false)
   const [showValidation, setShowValidation] = useState(false)
+  // Page overrides per parser: { parserName: { startPage, endPage } }
+  const [pageOverrides, setPageOverrides] = useState<Record<string, { startPage: string; endPage: string }>>({})
 
   const loadData = useCallback(async () => {
     try {
@@ -163,11 +288,27 @@ export default function VersionDetailPage() {
     return () => clearInterval(interval)
   }, [parseRuns, runAllActive, versionId])
 
+  const getPageOpts = (parserName: string): RunParserPageOpts | undefined => {
+    const ov = pageOverrides[parserName]
+    if (!ov) return undefined
+    const opts: RunParserPageOpts = {}
+    if (ov.startPage && !isNaN(Number(ov.startPage))) opts.startPage = Number(ov.startPage)
+    if (ov.endPage && !isNaN(Number(ov.endPage))) opts.endPage = Number(ov.endPage)
+    return (opts.startPage || opts.endPage) ? opts : undefined
+  }
+
+  const setPageField = (parserName: string, field: 'startPage' | 'endPage', value: string) => {
+    setPageOverrides((prev) => ({
+      ...prev,
+      [parserName]: { ...prev[parserName], [field]: value },
+    }))
+  }
+
   const handleRunParser = async (parserName: string) => {
     setActionError(null)
     setRunningParsers((prev) => new Set(prev).add(parserName))
     try {
-      await runParser(versionId, parserName)
+      await runParser(versionId, parserName, getPageOpts(parserName))
       await loadData()
     } catch (e) {
       setActionError(String(e))
@@ -207,8 +348,14 @@ export default function VersionDetailPage() {
     }
   }
 
+  const allParsersSucceeded = parseRuns.length > 0 && parseRuns.every((r) => r.status === 'success')
+
   const handleActivate = async () => {
-    if (!window.confirm('Set this version as the active MVS data source?')) return
+    if (!allParsersSucceeded) {
+      setActionError('Cannot activate: not all parsers have succeeded. Run all parsers first.')
+      return
+    }
+    if (!window.confirm('Set this version as the active MVS data source? This will make the webapp use this version\'s data for all MVS lookups.')) return
     setActionError(null)
     try {
       await activateVersion(versionId)
@@ -285,13 +432,18 @@ export default function VersionDetailPage() {
           </Box>
           <Stack direction="row" spacing={1}>
             {!version.is_active && (
-              <Button
-                variant="outlined"
-                startIcon={<StarBorderIcon />}
-                onClick={handleActivate}
-              >
-                Set Active
-              </Button>
+              <Tooltip title={allParsersSucceeded ? 'Activate this version for production use' : 'All parsers must succeed before activating'}>
+                <span>
+                  <Button
+                    variant="outlined"
+                    startIcon={<StarBorderIcon />}
+                    onClick={handleActivate}
+                    disabled={!allParsersSucceeded}
+                  >
+                    Set Active
+                  </Button>
+                </span>
+              </Tooltip>
             )}
             {version.is_active && (
               <Chip icon={<StarIcon />} label="Active Version" color="primary" />
@@ -400,6 +552,34 @@ export default function VersionDetailPage() {
                     </Typography>
                   )}
                 </Box>
+                {/* Page input fields for PDF-based parsers */}
+                {run.page_type && (
+                  <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+                    <TextField
+                      size="small"
+                      variant="outlined"
+                      placeholder={run.default_start_page != null ? String(run.default_start_page) : 'pg'}
+                      value={pageOverrides[run.parser_name]?.startPage ?? ''}
+                      onChange={(e) => setPageField(run.parser_name, 'startPage', e.target.value)}
+                      sx={{ width: run.page_type === 'range' || run.page_type === 'csv' ? 60 : 70, '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: 12, textAlign: 'center' } }}
+                      inputProps={{ inputMode: 'numeric' }}
+                    />
+                    {(run.page_type === 'range' || run.page_type === 'csv') && (
+                      <>
+                        <Typography variant="caption" color="text.secondary">{run.page_type === 'range' ? 'to' : ','}</Typography>
+                        <TextField
+                          size="small"
+                          variant="outlined"
+                          placeholder={run.default_end_page != null ? String(run.default_end_page) : ''}
+                          value={pageOverrides[run.parser_name]?.endPage ?? ''}
+                          onChange={(e) => setPageField(run.parser_name, 'endPage', e.target.value)}
+                          sx={{ width: 60, '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: 12, textAlign: 'center' } }}
+                          inputProps={{ inputMode: 'numeric' }}
+                        />
+                      </>
+                    )}
+                  </Stack>
+                )}
                 <Button
                   variant="outlined"
                   size="small"
@@ -415,6 +595,9 @@ export default function VersionDetailPage() {
                   {run.status === 'success' ? 'Re-run' : 'Run'}
                 </Button>
               </Box>
+              {run.status === 'success' && run.diff_summary && (
+                <DiffPanel diff={run.diff_summary} />
+              )}
             </Box>
           ))}
         </Paper>
